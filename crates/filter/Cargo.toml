@@ -1,0 +1,16 @@
+[package]
+name = "filter"
+version = "0.1.0"
+edition.workspace = true
+license.workspace = true
+publish = false
+
+# Milestone 37 (docs/adr/019-privacy-policies.md §1): the request filter —
+# Adblock Plus / EasyList-syntax and hosts-file lists, matched at the network
+# layer. Lists are untrusted input: parsing is bounded and fuzzed. No
+# dependencies beyond the diagnostics facade.
+[dependencies]
+diagnostics = { path = "../diagnostics" }
+
+[lints.rust]
+unsafe_code = "forbid"

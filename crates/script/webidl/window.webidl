@@ -1,0 +1,72 @@
+// The global object and what hangs off it (Milestone 40, ADR 023): storage
+// (Milestone 12, 36), `requestAnimationFrame` (Milestone 14), `fetch` and
+// `XMLHttpRequest` (Milestone 12, Phase F), the console.
+
+callback FrameRequestCallback = undefined (double time);
+
+[Global]
+interface Window : EventTarget {
+  // The global object itself (gap pass, 2026-10-21): `window.x`, `self.x`.
+  // Its `addEventListener` registers listeners; the engine fires no
+  // window events yet (`load`, `resize`: backlog).
+  readonly attribute Window window;
+  readonly attribute Window self;
+  readonly attribute Document document;
+  readonly attribute Storage localStorage;
+  readonly attribute Storage sessionStorage;
+  unsigned long requestAnimationFrame(FrameRequestCallback callback);
+  Promise<Response> fetch(USVString input, optional RequestInit init = {});
+};
+
+interface Storage {
+  DOMString? getItem(DOMString key);
+  undefined setItem(DOMString key, DOMString value);
+  undefined removeItem(DOMString key);
+  undefined clear();
+};
+
+namespace console {
+  undefined log(any... data);
+};
+
+enum RequestCredentials { "omit", "same-origin", "include" };
+
+dictionary RequestInit {
+  RequestCredentials credentials;
+};
+
+interface Headers {
+  ByteString? get(ByteString name);
+  boolean has(ByteString name);
+};
+
+interface Response {
+  readonly attribute unsigned short status;
+  readonly attribute boolean ok;
+  readonly attribute ByteString statusText;
+  readonly attribute USVString url;
+  [SameObject] readonly attribute Headers headers;
+  Promise<USVString> text();
+  Promise<any> json();
+};
+
+// Standard: `EventHandler` is a nullable callback typedef taking an event.
+callback EventHandler = any ();
+
+interface XMLHttpRequest : EventTarget {
+  constructor();
+  attribute EventHandler? onreadystatechange;
+  attribute EventHandler? onload;
+  attribute EventHandler? onerror;
+  readonly attribute unsigned short readyState;
+  attribute boolean withCredentials;
+  readonly attribute unsigned short status;
+  readonly attribute ByteString statusText;
+  readonly attribute USVString responseText;
+  // Standard: `any`, by `responseType`; only text is supported.
+  readonly attribute USVString response;
+  undefined open(ByteString method, USVString url);
+  undefined setRequestHeader(ByteString name, ByteString value);
+  undefined send();
+  ByteString? getResponseHeader(ByteString name);
+};

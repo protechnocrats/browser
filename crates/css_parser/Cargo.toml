@@ -1,0 +1,16 @@
+[package]
+name = "css_parser"
+version = "0.1.0"
+edition.workspace = true
+license.workspace = true
+publish = false
+
+[lints.rust]
+unsafe_code = "forbid"
+
+[dependencies]
+diagnostics = { path = "../diagnostics" }
+names = { path = "../names" }
+
+[dev-dependencies]
+diagnostics = { path = "../diagnostics", features = ["collector"] }

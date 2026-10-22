@@ -1,0 +1,1 @@
+var a = document.getElementById('a'); a.textContent = 'x'; a.style.backgroundColor = 'red'; var d = document.createElement('div'); d.setAttribute('id', 'n'); d.textContent = 'new'; a.appendChild(d); document.querySelector('#p').textContent = document.getElementById('n').textContent;

@@ -1,0 +1,10 @@
+[Adblock Plus 2.0]
+! comment
+||ads.example^
+||cdn.example^$third-party,script
+/banner/*/ad_
+|https://start.example/
+end.js|
+@@||ads.example/ok^
+||must.example^$important
+/promo/$domain=news.example|~sports.news.example

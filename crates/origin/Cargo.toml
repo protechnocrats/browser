@@ -1,0 +1,16 @@
+[package]
+name = "origin"
+version = "0.1.0"
+edition.workspace = true
+license.workspace = true
+publish = false
+
+# Milestone 28 (docs/adr/004-origin-and-site-types.md). One dependency, on
+# purpose: WHATWG URL parsing (host normalisation, IDNA) is what an origin
+# is defined over, and `url` is pure Rust. No `url` type is part of this
+# crate's public API, so it stays replaceable.
+[dependencies]
+url = "2"
+
+[lints.rust]
+unsafe_code = "forbid"

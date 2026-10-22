@@ -1,0 +1,21 @@
+[package]
+name = "images"
+version = "0.1.0"
+edition.workspace = true
+license.workspace = true
+publish = false
+
+[dependencies]
+diagnostics = { path = "../diagnostics" }
+png = "0.17"
+zune-jpeg = "0.4"
+zune-core = "0.4"
+gif = "0.14"
+image-webp = "0.2"
+rayon = "=1.10.0"
+
+[lints.rust]
+unsafe_code = "forbid"
+
+[dev-dependencies]
+diagnostics = { path = "../diagnostics", features = ["collector"] }

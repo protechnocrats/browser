@@ -1,0 +1,52 @@
+/* Milestone 33: the user-agent stylesheet — the defaults every browser
+   gives HTML elements, after the HTML Standard §15 "Rendering". Loaded by
+   the engine below every author rule (css_parser::CascadeOrigin).
+
+   Only properties this engine implements are listed, so the conformance
+   report's unsupported-feature counts stay about the pages, not this
+   sheet. Each later milestone adds the rules for what it implements. */
+
+body { margin: 8px; }
+
+p, blockquote, figure, dl, ul, ol, pre, address { margin-top: 1em; margin-bottom: 1em; }
+blockquote, figure { margin-left: 40px; margin-right: 40px; }
+dd { margin-left: 40px; }
+ul, ol, menu, dir { padding-left: 40px; }
+ul ul, ul ol, ol ul, ol ol { margin-top: 0; margin-bottom: 0; }
+
+h1 { font-size: 2em; margin-top: 0.67em; margin-bottom: 0.67em; }
+h2 { font-size: 1.5em; margin-top: 0.83em; margin-bottom: 0.83em; }
+h3 { font-size: 1.17em; margin-top: 1em; margin-bottom: 1em; }
+h4 { margin-top: 1.33em; margin-bottom: 1.33em; }
+h5 { font-size: 0.83em; margin-top: 1.67em; margin-bottom: 1.67em; }
+h6 { font-size: 0.67em; margin-top: 2.33em; margin-bottom: 2.33em; }
+
+pre, listing, xmp, plaintext { white-space: pre; }
+center { text-align: center; }
+th { text-align: center; }
+
+small { font-size: smaller; }
+big { font-size: larger; }
+sub { vertical-align: sub; font-size: smaller; }
+sup { vertical-align: super; font-size: smaller; }
+
+a[href] { color: #0000ee; }
+mark { background-color: yellow; color: black; }
+
+hr { border: 1px solid #a0a0a0; margin: 0.5em 0; }
+
+/* Tables (HTML §15.3.8). */
+table { border-spacing: 2px; }
+td, th { padding: 1px; vertical-align: middle; }
+caption { text-align: center; }
+
+/* Milestone 35: fonts and text decoration (HTML §15.3.3, §15.3.4). The
+   `dir` attribute maps to `direction` in the cascade (a presentational hint:
+   as universal `[dir]` rules here it cost every element a check). */
+h1, h2, h3, h4, h5, h6, b, strong, th, dt, legend { font-weight: bold; }
+i, em, cite, var, dfn, address { font-style: italic; }
+pre, code, kbd, samp, tt, listing, xmp, plaintext { font-family: monospace; }
+a[href], u, ins { text-decoration: underline; }
+s, strike, del { text-decoration: line-through; }
+bdo[dir=rtl] { unicode-bidi: bidi-override; }
+bdi { unicode-bidi: isolate; }

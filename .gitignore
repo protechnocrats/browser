@@ -1,0 +1,8 @@
+/target/
+**/target/
+
+# The conformance corpus's recordings and golden scenes (~23 MB of
+# third-party pages): kept locally, not in the repository. Rebuild with
+# `cargo run -p conformance --release -- record` then `run --bless`.
+/conformance/snapshots/
+/conformance/golden/

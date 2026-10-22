@@ -1,0 +1,19 @@
+[package]
+name = "style"
+version = "0.1.0"
+edition.workspace = true
+license.workspace = true
+publish = false
+
+[dependencies]
+diagnostics = { path = "../diagnostics" }
+dom = { path = "../dom" }
+css_parser = { path = "../css_parser" }
+rayon = "=1.10.0"
+
+[lints.rust]
+unsafe_code = "forbid"
+
+[dev-dependencies]
+diagnostics = { path = "../diagnostics", features = ["collector"] }
+html_parser = { path = "../html_parser" }

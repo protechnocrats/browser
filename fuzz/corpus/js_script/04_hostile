@@ -1,0 +1,1 @@
+var s = 'x'; for (var i = 0; i < 20; i++) { s = s + s; } try { localStorage.setItem('big', s); } catch (e) {} (function f(n) { return n ? f(n - 1) : 0; })(100000); document.getElementById(null); document.createElement(undefined).appendChild({__node_id: -1});

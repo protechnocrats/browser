@@ -1,0 +1,24 @@
+[package]
+name = "layout"
+version = "0.1.0"
+edition.workspace = true
+license.workspace = true
+publish = false
+
+[dependencies]
+diagnostics = { path = "../diagnostics" }
+dom = { path = "../dom" }
+style = { path = "../style" }
+css_parser = { path = "../css_parser" }
+text = { path = "../text" }
+images = { path = "../images" }
+rayon = "1"
+unicode-bidi = "0.3"
+unicode-linebreak = "0.1"
+
+[lints.rust]
+unsafe_code = "forbid"
+
+[dev-dependencies]
+diagnostics = { path = "../diagnostics", features = ["collector"] }
+html_parser = { path = "../html_parser" }

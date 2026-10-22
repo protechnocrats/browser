@@ -1,0 +1,25 @@
+[package]
+name = "browser_core"
+version = "0.1.0"
+edition.workspace = true
+license.workspace = true
+publish = false
+
+# Milestone 36 (docs/adr/010-capabilities.md): above `engine`, below the
+# shells. A host of the engine — it drives the pipeline only through the
+# `engine` facade (`scripts/check-host-boundary.sh`) — and the one place a
+# production build mints capabilities (`scripts/check-capabilities.sh`).
+[dependencies]
+capability = { path = "../capability" }
+diagnostics = { path = "../diagnostics" }
+engine = { path = "../engine" }
+origin = { path = "../origin" }
+# Milestone 37: building the profile's network (routes, DoH, TLS trust) and
+# filter from its settings; `network` is not engine-internal (the engine
+# re-exports its context type).
+network = { path = "../network" }
+filter = { path = "../filter" }
+storage = { path = "../storage" }
+
+[lints.rust]
+unsafe_code = "forbid"

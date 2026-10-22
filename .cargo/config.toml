@@ -1,0 +1,7 @@
+[env]
+# Test threads get a page thread's stack (16 MiB, `PAGE_THREAD_STACK_BYTES`,
+# ADR 007) — the stack every recursion cap in the pipeline is sized against.
+# The test harness's default is 2 MiB, which debug builds' frames outgrow at
+# those caps (the accessibility depth-cap tests overflowed on rustc 1.98).
+# Threads the code starts itself set their own sizes.
+RUST_MIN_STACK = "16777216"

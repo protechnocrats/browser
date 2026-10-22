@@ -1,0 +1,11 @@
+# Untraced (`#[unsafe_ignore_trace]`) fields that hold Boa GC handles, and
+# the `JsEnvironment` field `impl Drop for JsEnvironment` empties for each.
+# `scripts/check-gc-handles.sh` fails the build on an untraced field holding
+# a handle that is not listed here.
+#
+# Empty since Milestone 40 (ADR 023 §5): every handle the runtime keeps —
+# listeners, animation-frame callbacks, XHR handlers, pending promises — is
+# in a traced table in Boa's heap, and the host holds only ids. Until then
+# four were listed here, released by hand (ADR 015).
+#
+# <field type as written> | <JsEnvironment field emptied in Drop>

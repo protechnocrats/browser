@@ -1,0 +1,1 @@
+transform:rotate(45deg) skew(1deg,2deg) translate(1px,2px);transition:all 1s cubic-bezier(0,0,1,1)

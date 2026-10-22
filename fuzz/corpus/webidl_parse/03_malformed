@@ -1,0 +1,1 @@
+interface A : { attribute; }; [Global interface; enum E {}; callback = ; namespace n { attribute long x; };

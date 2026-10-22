@@ -1,0 +1,25 @@
+[package]
+name = "conformance"
+version = "0.1.0"
+edition.workspace = true
+license.workspace = true
+publish = false
+
+# Milestone 32: the real-site conformance harness. A HOST (like `app`): it
+# drives the pipeline through `engine` only (checked by
+# scripts/check-host-boundary.sh). `network` for the record/replay routes
+# (a `NetworkRoute` implementation), `png` to write rasterised frames,
+# `miniz_oxide` (already in the tree via `png`; pure Rust) to keep recorded
+# bodies small in git.
+[dependencies]
+diagnostics = { path = "../diagnostics" }
+engine = { path = "../engine" }
+# Milestone 36: the grants a browser profile gives a web page.
+browser_core = { path = "../browser_core" }
+text = { path = "../text" }
+network = { path = "../network" }
+png = "0.17"
+miniz_oxide = "0.8"
+
+[lints.rust]
+unsafe_code = "forbid"

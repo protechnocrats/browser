@@ -1,0 +1,40 @@
+[package]
+name = "network"
+version = "0.1.0"
+edition.workspace = true
+license.workspace = true
+publish = false
+
+[dependencies]
+diagnostics = { path = "../diagnostics" }
+origin = { path = "../origin" }
+url = "2"
+zeroize = "1"
+# Content-Encoding (gzip/deflate) decoding; pure Rust, already in the tree via `png`.
+miniz_oxide = "0.8"
+ureq = { version = "2", default-features = false, features = ["tls", "socks-proxy"] }
+# Milestone 37: the request filter (ADR 019).
+filter = { path = "../filter" }
+# Milestone 37 (ADR 018): the TLS configuration `ureq` builds, with extra
+# trust anchors — the same versions `ureq` already uses (no new code in the
+# tree, only direct use of it).
+rustls = { version = "0.23", default-features = false, features = ["ring", "std", "tls12"] }
+webpki-roots = "0.26"
+
+[lints.rust]
+unsafe_code = "forbid"
+
+# `unsafe_code = "forbid"` covers THIS crate's own code. It does not
+# (cannot) extend into `ureq`'s TLS backend: rustls's default crypto
+# provider is `ring`, which contains hand-written assembly/C for
+# performance-critical primitives (AES, SHA, elliptic-curve math) and
+# is explicitly NOT pure-safe-Rust. This is a real, narrow, deliberate
+# exception to this project's memory-safety principle — not an
+# oversight. See the crate-level doc comment in src/lib.rs for the
+# full reasoning; short version: no mature pure-Rust TLS crypto
+# backend exists yet, and `ring` is the same trust boundary rustls
+# itself (used in production by Cloudflare, AWS, and others) accepts.
+
+[dev-dependencies]
+diagnostics = { path = "../diagnostics", features = ["collector"] }
+rustls = { version = "0.23", default-features = false, features = ["ring", "std", "tls12"] }

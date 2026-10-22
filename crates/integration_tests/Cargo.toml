@@ -1,0 +1,24 @@
+[package]
+name = "integration_tests"
+version = "0.1.0"
+edition.workspace = true
+license.workspace = true
+publish = false
+
+[dependencies]
+dom = { path = "../dom" }
+html_parser = { path = "../html_parser" }
+css_parser = { path = "../css_parser" }
+style = { path = "../style" }
+layout = { path = "../layout" }
+text = { path = "../text" }
+images = { path = "../images" }
+network = { path = "../network" }
+rendering = { path = "../rendering" }
+
+# Script environments are built with the test-support constructors (ADR 010).
+[dev-dependencies]
+js = { path = "../js", features = ["test-support"] }
+
+[lints.rust]
+unsafe_code = "forbid"

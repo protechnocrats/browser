@@ -1,0 +1,53 @@
+[workspace]
+resolver = "2"
+members = [
+    "crates/names",
+    "crates/dom",
+    "crates/html_parser",
+    "crates/css_parser",
+    "crates/style",
+    "crates/layout",
+    "crates/text",
+    "crates/images",
+    "crates/origin",
+    "crates/storage",
+    "crates/capability",
+    "crates/filter",
+    "crates/privacy",
+    "crates/network",
+    "crates/webidl",
+    "crates/script",
+    "crates/js",
+    "crates/accessibility",
+    "crates/diagnostics",
+    "crates/pattern",
+    "crates/engine",
+    "crates/browser_core",
+    "crates/conformance",
+    "crates/integration_tests",
+    "crates/rendering",
+    "crates/gpu_backend",
+    "crates/shell_desktop",
+    "crates/sandbox",
+    "crates/renderer",
+    "app",
+]
+
+# Dependency-direction invariant (frozen — see architecture doc §3, §6.1;
+# and the milestone-1 scaffolding discussion):
+#
+#   dom / style / layout / rendering  → NEVER depend on platform (wgpu, winit).
+#   Only gpu_backend and shell_desktop are allowed to touch platform.
+#
+# `cargo tree -p layout` (or -p rendering) must never show wgpu or winit.
+# If it ever does, that's a broken invariant, not a style nit.
+
+[workspace.package]
+edition = "2021"
+license = "GPL-3.0-only"
+
+# Panic strategy (docs/adr/007-panic-containment.md): every profile must
+# keep the default `panic = "unwind"`. A page thread's panic is caught and
+# reported as that page's crash; `panic = "abort"` would turn it into the
+# whole browser's. `scripts/check-panic-strategy.sh` fails if a manifest
+# sets `abort`.

@@ -1,0 +1,5 @@
+browser-engine settings 1
+scroll.invert = true
+scroll.speed = 2.5
+zoom.default = 1.25
+privacy.mode = false

@@ -1,0 +1,53 @@
+name: Fuzz (nightly, long)
+
+# The PR-time `fuzz-smoke` job gives each target 60 s. Real bugs live in
+# the long tail, so this scheduled run gives each target 10+ minutes and
+# keeps the corpus it grows. Any crash is uploaded as an artifact;
+# reproduce locally with fuzz/examples/replay.rs, then commit the input
+# as a seed (fuzz/corpus/<target>/) together with the fix.
+
+on:
+  schedule:
+    - cron: "17 3 * * *"
+  workflow_dispatch:
+    inputs:
+      seconds_per_target:
+        description: "Seconds per fuzz target"
+        default: "600"
+
+env:
+  CARGO_TERM_COLOR: always
+
+jobs:
+  fuzz:
+    name: Fuzz every target
+    runs-on: ubuntu-latest
+    timeout-minutes: 180
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@nightly
+      - uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: fuzz
+      - name: Install cargo-fuzz
+        uses: taiki-e/install-action@v2
+        with:
+          tool: cargo-fuzz
+      - name: Fuzz
+        run: bash scripts/fuzz-smoke.sh "${{ github.event.inputs.seconds_per_target || '600' }}"
+      - name: Upload crash artifacts
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: fuzz-crashes-nightly
+          path: fuzz/artifacts/
+          if-no-files-found: ignore
+      # The corpus the run grew — reviewers can fold interesting inputs
+      # back into fuzz/corpus/ (minimized with `cargo fuzz cmin`).
+      - name: Upload grown corpus
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: fuzz-corpus-nightly
+          path: fuzz/corpus/
+          if-no-files-found: ignore

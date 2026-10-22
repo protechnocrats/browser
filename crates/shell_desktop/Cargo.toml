@@ -1,0 +1,19 @@
+[package]
+name = "shell_desktop"
+version = "0.1.0"
+edition.workspace = true
+license.workspace = true
+publish = false
+
+[dependencies]
+diagnostics = { path = "../diagnostics" }
+rendering = { path = "../rendering" }
+gpu_backend = { path = "../gpu_backend" }
+winit = "0.29"
+pollster = "0.3"
+
+# The other of the two crates allowed to depend on platform — see
+# workspace Cargo.toml's frozen dependency-direction invariant.
+
+[lints.rust]
+unsafe_code = "forbid"

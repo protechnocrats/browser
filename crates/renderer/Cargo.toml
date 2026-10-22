@@ -1,0 +1,25 @@
+[package]
+name = "renderer"
+version = "0.1.0"
+edition.workspace = true
+license.workspace = true
+publish = false
+
+# The renderer process (ADR 016): a host of the engine, like `app`. The
+# library is the launcher the browser grants the engine; the binary is
+# what it launches.
+[[bin]]
+name = "browser-renderer"
+path = "src/main.rs"
+
+[dependencies]
+engine = { path = "../engine" }
+sandbox = { path = "../sandbox" }
+text = { path = "../text" }
+
+[dev-dependencies]
+network = { path = "../network" }
+rendering = { path = "../rendering" }
+
+[lints.rust]
+unsafe_code = "forbid"

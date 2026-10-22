@@ -1,0 +1,1 @@
+localStorage.setItem('k', 'v'); sessionStorage.setItem('k', localStorage.getItem('k')); requestAnimationFrame(function (t) { requestAnimationFrame(function () {}); }); fetch('/api').then(function (r) { return r.text(); }).catch(function () {}); var x = new XMLHttpRequest(); x.open('GET', '/x'); x.send();

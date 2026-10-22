@@ -1,0 +1,29 @@
+[package]
+name = "gpu_backend"
+version = "0.1.0"
+edition.workspace = true
+license.workspace = true
+publish = false
+
+[dependencies]
+rendering = { path = "../rendering" }
+text = { path = "../text" }
+style = { path = "../style" }
+diagnostics = { path = "../diagnostics" }
+wgpu = "0.20"
+winit = "0.29"
+bytemuck = { version = "1", features = ["derive"] }
+pollster = "0.3"
+
+# This crate is one of exactly two allowed to depend on platform
+# (wgpu/winit) — see scripts/platform-crates.txt and the
+# dependency-direction guardrail. Like every crate it forbids `unsafe`
+# (wgpu's safe surface API is enough).
+
+[lints.rust]
+unsafe_code = "forbid"
+
+[dev-dependencies]
+# The shader compiler wgpu itself uses — to validate the WGSL in tests,
+# without a GPU.
+naga = { version = "0.20", features = ["wgsl-in"] }

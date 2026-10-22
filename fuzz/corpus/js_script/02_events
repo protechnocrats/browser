@@ -1,0 +1,1 @@
+document.getElementById('a').addEventListener('click', function (e) { e.stopPropagation(); e.preventDefault(); }, true); document.addEventListener('keydown', function (e) { throw new Error(e.key); }); document.getElementById('l').addEventListener('click', function (e) { e.preventDefault(); });

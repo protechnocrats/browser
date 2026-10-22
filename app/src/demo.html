@@ -1,0 +1,189 @@
+
+<html>
+<head>
+<style>
+  div { color: #a6adc8; }
+  .card { background-color: #1e1e2e; width: 560px; margin: 20px; padding: 20px; }
+  #headline { color: #ffffff; font-size: 24px; margin-bottom: 16px; }
+  .prose { font-size: 16px; margin-bottom: 16px; }
+  #mover {
+    width: 60px; height: 60px;
+    background-color: #4ecdc4;
+    border: 3px solid #ffe66d;
+    margin-bottom: 16px;
+  }
+  #counter-button {
+    width: 220px; height: 40px;
+    background-color: #45475a;
+    color: #ffffff;
+    margin-bottom: 16px;
+  }
+  #click-log { font-size: 13px; margin-bottom: 16px; }
+  #search {
+    width: 300px; height: 28px;
+    background-color: #313244;
+    color: #ffffff;
+    border: 1px solid #585b70;
+    margin-bottom: 8px;
+  }
+  /* Milestone 20: :invalid/:valid are real now — required+empty gets
+     a red border, filled gets a green one. */
+  #search:invalid { border: 1px solid #f38ba8; }
+  #search:valid { border: 1px solid #a6e3a1; }
+  #search-submit {
+    width: 100px; height: 34px;
+    background-color: #89b4fa;
+    color: #1e1e2e;
+    margin-bottom: 16px;
+  }
+  #spacer { height: 1200px; }
+  #options { margin-bottom: 16px; }
+  #options-status { font-size: 13px; margin-bottom: 8px; }
+  #editable-note {
+    width: 300px; height: 28px;
+    background-color: #313244;
+    color: #ffffff;
+    border: 1px solid #585b70;
+    margin-bottom: 16px;
+  }
+  /* Milestone 22: a real CSS transition — clicking re-triggers the
+     cascade (via a JS inline-style toggle) with a new background-color
+     target, and `apply_transitions` eases toward it over 400ms instead
+     of snapping. NOT a `:hover`-triggered demo: `:hover` is still
+     inert in this engine's cascade (see `matches_compound`'s
+     `PseudoClass::Interactive` arm) — a click-driven trigger is the
+     one this milestone can actually demonstrate end to end. */
+  #transition-box {
+    width: 160px; height: 40px;
+    background-color: #45475a;
+    margin-bottom: 16px;
+    transition: background-color 0.4s ease;
+  }
+  /* Milestone 22: a real @keyframes animation, looping forever,
+     driven purely by CSS — no requestAnimationFrame JS involved
+     (unlike #mover above, which is Milestone 13/14's JS-driven one). */
+  @keyframes pulse {
+    from { background-color: #cba6f7; }
+    to { background-color: #94e2d5; }
+  }
+  #pulse-box {
+    width: 160px; height: 40px;
+    margin-bottom: 16px;
+    animation: pulse 1.5s infinite;
+  }
+</style>
+</head>
+  <body>
+    <div class="card">
+      <div id="headline">loading...</div>
+      <p class="prose">
+        The teal box below animates via <code>requestAnimationFrame</code>
+        (Milestones 13/14). The button dispatches a real <code>click</code>
+        event (Milestone 15) and, on each click, creates a brand new
+        detached <code>&lt;div&gt;</code> via
+        <code>document.createElement</code> and really attaches it below
+        via <code>appendChild</code> (Milestone 18). Below that, a real
+        editable text input inside a <code>&lt;form&gt;</code>
+        (Milestone 16) — click it, type, use arrow keys/backspace, press
+        Tab to move focus; a real caret follows the cursor and
+        click-to-position works (Milestone 19). The input is
+        <code>required</code> — its border is red when empty, green once
+        filled (real <code>:invalid</code>/<code>:valid</code>,
+        Milestone 20), and clicking Search won't submit at all while
+        it's empty (real client-side validation, also Milestone 20).
+        The checkbox and radio buttons below are also real
+        (Milestone 19) — click to toggle/select. The two boxes below
+        that show real CSS animation (Milestone 22): clicking the first
+        one eases its background color over 400ms via a real
+        <code>transition</code>; the second one loops forever via a
+        real <code>@keyframes</code> animation, no JS involved.
+      </p>
+      <div id="mover"></div>
+      <div id="counter-button">Clicked 0 times</div>
+      <div id="click-log"></div>
+      <div id="transition-box">click me: transition</div>
+      <div id="pulse-box">@keyframes pulse (infinite)</div>
+      <form id="search-form">
+        <input id="search" type="text" required>
+        <button id="search-submit">Search</button>
+      </form>
+      <div id="options">
+        <input id="agree" type="checkbox">
+        <input id="size-small" type="radio" name="size">
+        <input id="size-medium" type="radio" name="size">
+        <input id="size-large" type="radio" name="size">
+      </div>
+      <div id="options-status">agree: false, size: none</div>
+      <p class="prose">
+        A real <code>contenteditable</code> element (Milestone 23) —
+        click it, type, use arrow keys/backspace; it edits its own real
+        DOM text content directly (not a special-cased value), and the
+        caret/click-to-position machinery Milestone 19 built for
+        <code>&lt;input&gt;</code> works here too.
+      </p>
+      <div id="editable-note" contenteditable="true">edit me</div>
+      <p class="prose">
+        Real page navigation (Milestone 21) — clicking this replaces
+        this ENTIRE page with a real, freshly fetched one, on a
+        background thread (the window stays responsive while it
+        loads): <a id="nav-link" href="https://example.com/">a real
+        external link</a>.
+      </p>
+      <div id="spacer"></div>
+      <script>
+        document.getElementById('headline').textContent = 'Milestones 11-21: live JS + input + forms + real DOM creation + caret/checkbox/radio + full event model + validation + page navigation';
+
+        function animate(timestampMs) {
+          var x = 40 + 40 * Math.sin(timestampMs / 500);
+          document.getElementById('mover').style.transform = 'translate(' + x + 'px, 0px)';
+          requestAnimationFrame(animate);
+        }
+        requestAnimationFrame(animate);
+
+        var clicks = 0;
+        document.getElementById('counter-button').addEventListener('click', function () {
+          clicks += 1;
+          document.getElementById('counter-button').textContent = 'Clicked ' + clicks + ' times';
+
+          // Milestone 18: a real detached element, configured, then
+          // really attached — not the old one-call appendChild(tag, text).
+          var entry = document.createElement('div');
+          entry.setAttribute('class', 'log-entry');
+          entry.textContent = 'created + appended click #' + clicks;
+          document.getElementById('click-log').appendChild(entry);
+        });
+
+        document.getElementById('search-form').addEventListener('submit', function () {
+          console.log('form submitted');
+        });
+
+        // Milestone 22: toggles the target color on each click — the
+        // `transition: background-color 0.4s ease` declared on this
+        // element (see <style> above) is what makes it actually EASE
+        // between the two colors over 400ms rather than snap instantly.
+        var transitionedOn = false;
+        document.getElementById('transition-box').addEventListener('click', function () {
+          transitionedOn = !transitionedOn;
+          document.getElementById('transition-box').style.backgroundColor = transitionedOn ? '#f9e2af' : '#45475a';
+        });
+
+        // Milestone 19: real checkbox/radio — native toggle/mutual-
+        // exclusion happens before this listener even runs (see
+        // `js::JsEnvironment::dispatch_click`), so `.checked` here is
+        // already the post-click state.
+        function updateOptionsStatus() {
+          var size = 'none';
+          ['small', 'medium', 'large'].forEach(function (s) {
+            if (document.getElementById('size-' + s).checked) { size = s; }
+          });
+          document.getElementById('options-status').textContent =
+            'agree: ' + document.getElementById('agree').checked + ', size: ' + size;
+        }
+        document.getElementById('agree').addEventListener('click', updateOptionsStatus);
+        document.getElementById('size-small').addEventListener('click', updateOptionsStatus);
+        document.getElementById('size-medium').addEventListener('click', updateOptionsStatus);
+        document.getElementById('size-large').addEventListener('click', updateOptionsStatus);
+      </script>
+    </div>
+  </body>
+</html>

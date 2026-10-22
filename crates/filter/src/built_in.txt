@@ -1,0 +1,20 @@
+! browser-engine built-in tracker list (Milestone 37, ADR 019 §1).
+! Written for this project: host names of well-known third-party analytics
+! and advertising endpoints, which are facts, not anyone's list content.
+! Kept short on purpose — users load full lists into the profile's
+! `filters/` directory. Every rule here applies to third-party requests
+! only, so a site's own pages on these hosts still load.
+||google-analytics.com^$third-party
+||googletagmanager.com^$third-party
+||doubleclick.net^$third-party
+||googlesyndication.com^$third-party
+||connect.facebook.net^$third-party
+||scorecardresearch.com^$third-party
+||hotjar.com^$third-party
+||mixpanel.com^$third-party
+||segment.io^$third-party
+||quantserve.com^$third-party
+||adnxs.com^$third-party
+||criteo.com^$third-party
+||taboola.com^$third-party
+||outbrain.com^$third-party

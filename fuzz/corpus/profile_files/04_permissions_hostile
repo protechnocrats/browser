@@ -1,0 +1,6 @@
+browser-engine permissions 1
+null	camera	allow
+https://a.example/x	camera	allow
+https://a.example	filesystem	allow
+https://xn--80ak6aa92e.com	geolocation	deny
+			

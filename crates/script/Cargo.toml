@@ -1,0 +1,35 @@
+[package]
+name = "script"
+version = "0.1.0"
+edition.workspace = true
+license.workspace = true
+publish = false
+
+# Milestone 40 (docs/adr/023-script-runtime-and-bindings.md): the script
+# runtime interface and everything on the host side of it — the bindings
+# generated from `webidl/`, the DOM operations, events, forms, editing,
+# `fetch`/XHR and storage — written against plain values, with no JavaScript
+# engine in sight. `js` implements the runtime with Boa.
+
+# `test-runtime`: the stub runtime (`stub`) and the binding cases every
+# runtime must pass (`cases`). For tests and the fuzz workspace.
+[features]
+test-runtime = []
+
+[dependencies]
+capability = { path = "../capability" }
+diagnostics = { path = "../diagnostics" }
+dom = { path = "../dom" }
+network = { path = "../network" }
+origin = { path = "../origin" }
+privacy = { path = "../privacy" }
+storage = { path = "../storage" }
+
+[build-dependencies]
+webidl = { path = "../webidl" }
+
+[dev-dependencies]
+diagnostics = { path = "../diagnostics", features = ["collector"] }
+
+[lints.rust]
+unsafe_code = "forbid"

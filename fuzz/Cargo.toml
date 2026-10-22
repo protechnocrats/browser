@@ -1,0 +1,255 @@
+[package]
+name = "browser-fuzz"
+version = "0.0.0"
+publish = false
+edition = "2021"
+license = "GPL-3.0-only"
+
+# Deliberately its own workspace (empty [workspace] table) — the
+# standard cargo-fuzz convention. Without this, Cargo would try to
+# fold this crate into the parent workspace at ../Cargo.toml, which
+# isn't what we want: this crate needs nightly + libFuzzer, the rest
+# of the project deliberately doesn't.
+[workspace]
+
+[package.metadata]
+cargo-fuzz = true
+
+# `libfuzzer-sys` compiles libFuzzer's C++ runtime, so it is optional:
+# `cargo test --no-default-features` builds the library and the
+# stable-Rust replay/mutation tests on any machine, while `cargo fuzz`
+# (default features) builds the real libFuzzer binaries.
+[features]
+default = ["libfuzzer"]
+libfuzzer = ["dep:libfuzzer-sys"]
+
+[lib]
+name = "browser_fuzz"
+path = "src/lib.rs"
+
+[dependencies]
+libfuzzer-sys = { version = "0.4", optional = true }
+html_parser = { path = "../crates/html_parser" }
+css_parser = { path = "../crates/css_parser" }
+style = { path = "../crates/style" }
+images = { path = "../crates/images" }
+network = { path = "../crates/network" }
+origin = { path = "../crates/origin" }
+dom = { path = "../crates/dom" }
+# `test-support`: the fuzz workspace builds script environments directly.
+js = { path = "../crates/js", features = ["test-support"] }
+# Milestone 36: the profile files Browser Core reads back.
+browser_core = { path = "../crates/browser_core" }
+storage = { path = "../crates/storage" }
+# Milestone 37: filter lists and DNS messages.
+filter = { path = "../crates/filter" }
+layout = { path = "../crates/layout" }
+rendering = { path = "../crates/rendering" }
+engine = { path = "../crates/engine" }
+text = { path = "../crates/text" }
+pattern = { path = "../crates/pattern" }
+# Milestone 40: the WebIDL subset the bindings are generated from.
+webidl = { path = "../crates/webidl" }
+url = "2"
+
+# One [[bin]] per fuzz target. scripts/fuzz-smoke.sh discovers targets
+# from `cargo fuzz list`, so adding a target here is all that CI needs.
+[[bin]]
+name = "parse_document"
+path = "fuzz_targets/parse_document.rs"
+required-features = ["libfuzzer"]
+test = false
+doc = false
+bench = false
+
+[[bin]]
+name = "parse_stylesheet"
+path = "fuzz_targets/parse_stylesheet.rs"
+required-features = ["libfuzzer"]
+test = false
+doc = false
+bench = false
+
+[[bin]]
+name = "parse_inline_style"
+path = "fuzz_targets/parse_inline_style.rs"
+required-features = ["libfuzzer"]
+test = false
+doc = false
+bench = false
+
+[[bin]]
+name = "decode_auto"
+path = "fuzz_targets/decode_auto.rs"
+required-features = ["libfuzzer"]
+test = false
+doc = false
+bench = false
+
+[[bin]]
+name = "url_origin"
+path = "fuzz_targets/url_origin.rs"
+required-features = ["libfuzzer"]
+test = false
+doc = false
+bench = false
+
+[[bin]]
+name = "cookie_header"
+path = "fuzz_targets/cookie_header.rs"
+required-features = ["libfuzzer"]
+test = false
+doc = false
+bench = false
+
+[[bin]]
+name = "layout_document"
+path = "fuzz_targets/layout_document.rs"
+required-features = ["libfuzzer"]
+test = false
+doc = false
+bench = false
+
+[[bin]]
+name = "webidl_parse"
+path = "fuzz_targets/webidl_parse.rs"
+required-features = ["libfuzzer"]
+test = false
+doc = false
+bench = false
+
+[[bin]]
+name = "pattern_matches"
+path = "fuzz_targets/pattern_matches.rs"
+required-features = ["libfuzzer"]
+test = false
+doc = false
+bench = false
+
+
+[[bin]]
+name = "psl_parse"
+path = "fuzz_targets/psl_parse.rs"
+required-features = ["libfuzzer"]
+test = false
+doc = false
+bench = false
+
+
+[[bin]]
+name = "origin_parse"
+path = "fuzz_targets/origin_parse.rs"
+required-features = ["libfuzzer"]
+test = false
+doc = false
+bench = false
+
+[[bin]]
+name = "font_parse"
+path = "fuzz_targets/font_parse.rs"
+required-features = ["libfuzzer"]
+test = false
+doc = false
+bench = false
+
+[[bin]]
+name = "font_face_src"
+path = "fuzz_targets/font_face_src.rs"
+required-features = ["libfuzzer"]
+test = false
+doc = false
+bench = false
+
+[[bin]]
+name = "content_decoding"
+path = "fuzz_targets/content_decoding.rs"
+required-features = ["libfuzzer"]
+test = false
+doc = false
+bench = false
+
+[[bin]]
+name = "http_headers"
+path = "fuzz_targets/http_headers.rs"
+required-features = ["libfuzzer"]
+test = false
+doc = false
+bench = false
+
+[[bin]]
+name = "js_script"
+path = "fuzz_targets/js_script.rs"
+required-features = ["libfuzzer"]
+test = false
+doc = false
+bench = false
+
+[[bin]]
+name = "css_length"
+path = "fuzz_targets/css_length.rs"
+required-features = ["libfuzzer"]
+test = false
+doc = false
+bench = false
+
+[[bin]]
+name = "css_color"
+path = "fuzz_targets/css_color.rs"
+required-features = ["libfuzzer"]
+test = false
+doc = false
+bench = false
+
+[[bin]]
+name = "css_background"
+path = "fuzz_targets/css_background.rs"
+required-features = ["libfuzzer"]
+test = false
+doc = false
+bench = false
+
+[[bin]]
+name = "css_grid"
+path = "fuzz_targets/css_grid.rs"
+required-features = ["libfuzzer"]
+test = false
+doc = false
+bench = false
+
+[[bin]]
+name = "ipc_decode"
+path = "fuzz_targets/ipc_decode.rs"
+required-features = ["libfuzzer"]
+test = false
+
+[[bin]]
+name = "web_font"
+path = "fuzz_targets/web_font.rs"
+required-features = ["libfuzzer"]
+test = false
+doc = false
+bench = false
+
+[[bin]]
+name = "profile_files"
+path = "fuzz_targets/profile_files.rs"
+required-features = ["libfuzzer"]
+test = false
+doc = false
+bench = false
+
+[[bin]]
+name = "filter_list"
+path = "fuzz_targets/filter_list.rs"
+required-features = ["libfuzzer"]
+test = false
+doc = false
+bench = false
+
+[[bin]]
+name = "dns_message"
+path = "fuzz_targets/dns_message.rs"
+required-features = ["libfuzzer"]
+test = false
+doc = false
+bench = false

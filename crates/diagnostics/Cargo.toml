@@ -1,0 +1,30 @@
+[package]
+name = "diagnostics"
+version = "0.1.0"
+edition.workspace = true
+license.workspace = true
+publish = false
+
+# Milestone 27 — observability. See docs/adr/001-observability-facade.md.
+#
+# Core crates depend on THIS crate for tracing macros and counters; none
+# of them ever depends on a tracing *subscriber*. The subscriber is the
+# host's choice (`app --trace` installs `collector::Collector`), so the
+# engine stays free of any output policy: no mandatory telemetry, no
+# phone-home, nothing printed unless a host asks (architecture doc §1,
+# vendor-independent).
+
+[features]
+# `collector::Collector`, a small in-process `tracing` subscriber used by
+# tests (capturing events) and by `app --trace` (per-frame stage
+# timings). Off by default so core crates cannot even see it; only `app`
+# and dev-dependencies turn it on.
+collector = []
+
+[dependencies]
+# Facade only: no `attributes` proc-macro, no `log` bridge, no
+# subscriber. `std` is needed for thread-local default dispatchers.
+tracing = { version = "0.1", default-features = false, features = ["std"] }
+
+[lints.rust]
+unsafe_code = "forbid"

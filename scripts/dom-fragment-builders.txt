@@ -1,0 +1,12 @@
+# Files outside `dom` allowed to build or edit owned `dom::Element` trees —
+# fragments, never a live document (ADR 021 §3). `scripts/check-dom-encapsulation.sh`
+# fails on any other file that takes `&mut Element` or matches or builds
+# `Node::Element` / `Node::Text` outside test code.
+#
+# <file> | <why a fragment is what exists there>
+crates/html_parser/src/lib.rs | The parser builds the document's tree before there is a document.
+crates/script/src/detached.rs | `createElement`'d and removed subtrees live here until inserted (ADR 021 §3).
+crates/script/src/cases.rs | The binding cases (test-runtime feature) build their test documents by hand, before they are documents.
+crates/script/src/host.rs | Edits a detached subtree in place (`setAttribute` etc. on an element not in the document).
+crates/layout/src/box_model.rs | `::before`/`::after` generated content: synthetic elements that are never in the document.
+crates/engine/src/loader.rs | Resolves `<img src>` URLs in the parsed tree before it becomes a document.

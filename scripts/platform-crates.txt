@@ -1,0 +1,9 @@
+# Platform crates: the ONLY crates allowed to depend on wgpu/winit and
+# (audited, at the smallest possible boundary) to use `unsafe`.
+# See architecture doc §2 ("Rules for `unsafe`") and §3.
+gpu_backend
+shell_desktop
+# ADR 016: the renderer's OS sandbox (landlock, seccompiler) and the renderer
+# host binary that uses it.
+sandbox
+renderer

@@ -1,0 +1,189 @@
+name: CI
+
+# Wires up what scripts/check-dependency-direction.sh has said about
+# itself since it was written: "This is meant to run in CI on every
+# change, not just be read once... wire this in as a required check."
+# Same idea extended to the workspace's tests and lints — every one of
+# these was already being run by hand before every change; this just
+# makes that non-optional.
+
+on:
+  push:
+    branches: [main, master]
+  pull_request:
+    branches: [main, master]
+
+env:
+  CARGO_TERM_COLOR: always
+
+jobs:
+  ci:
+    name: Build, test, lint, architecture check
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install Rust toolchain
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          components: clippy
+
+      - name: Cache cargo registry and build artifacts
+        uses: Swatinem/rust-cache@v2
+
+      # winit/wgpu on Linux dynamically load X11/Wayland/Vulkan at
+      # RUNTIME (confirmed: the built `app` binary has no link-time
+      # dependency on any of them — only libc/libm/libgcc_s), and no
+      # crate in this workspace has a test that opens a real window or
+      # GPU device. This install is a defensive default for anything
+      # that still wants headers/pkg-config present to COMPILE (e.g. a
+      # bindgen build script) — if a run shows it's unnecessary, trim
+      # it.
+      - name: Install Linux build dependencies (winit/wgpu headers)
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y pkg-config libx11-dev libxkbcommon-dev libwayland-dev
+
+      - name: Build workspace (release)
+        run: cargo build --workspace --release
+
+      # --release matters here, not just for speed: several recursion-
+      # depth caps (html_parser::MAX_NESTING_DEPTH, and the matching
+      # caps in accessibility/style/layout) were sized against
+      # optimized-build stack-frame sizes. A debug build's larger,
+      # uninlined frames could overflow the stack at the same cap —
+      # this project's own security-hardening tests were all verified
+      # in --release for exactly that reason.
+      - name: Run tests (release)
+        run: cargo test --workspace --release
+
+      # Ratchet, not `-D warnings`: the existing clippy backlog is
+      # mostly reviewed test-code style and not worth blocking every PR
+      # on, but it must never GROW. scripts/clippy-baseline.txt holds
+      # the count; the script fails on any increase (and on a hard
+      # compile error). Flip to `-D warnings` after the backlog is
+      # burned down (ROADMAP.md §4).
+      # Milestone 32: replay the recorded real-site corpus offline (it is
+      # also asserted by `cargo test` above); publish the report and the
+      # rasterised frames so a failure can be looked at.
+      # The recordings are kept out of git (.gitignore); this step runs
+      # only where they have been restored into conformance/snapshots/.
+      - name: Conformance corpus report
+        if: hashFiles('conformance/snapshots/**/manifest') != ''
+        run: cargo run -p conformance --release -- run --out target/conformance
+      - name: Upload conformance report
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: conformance-report
+          path: target/conformance/
+
+      - name: Clippy ratchet (warning count must not increase)
+        run: bash scripts/clippy-ratchet.sh
+
+      - name: Dependency-direction invariant (architecture doc §3)
+        run: bash scripts/check-dependency-direction.sh
+
+      - name: unsafe-code guardrail (architecture doc §2)
+        run: bash scripts/check-forbid-unsafe.sh
+
+      # The guardrails themselves are tested: a guardrail that has never
+      # been seen to fail is not evidence of anything.
+      - name: Guardrail self-test
+        run: bash scripts/test-guardrails.sh
+
+      # Stable-Rust replay of every committed fuzz seed, every structural
+      # stress input (100,000-deep nesting etc.), and a deterministic
+      # mutation pass — needs no nightly or C++ toolchain, and turns each
+      # crash the fuzzers ever found into a permanent regression test.
+      # --release for the same stack-frame-size reason as above.
+      - name: Fuzz corpus replay + stress (stable)
+        working-directory: fuzz
+        run: cargo test --release --no-default-features
+
+  # -------------------------------------------------------------------
+  supply-chain:
+    name: Supply chain (cargo audit, cargo deny)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - name: Install cargo-audit and cargo-deny
+        uses: taiki-e/install-action@v2
+        with:
+          tool: cargo-audit,cargo-deny
+      # RustSec advisories against Cargo.lock. Exceptions live in
+      # .cargo/audit.toml, each with a reason and expiry in deny.toml.
+      - name: cargo audit
+        run: cargo audit
+      # Licenses, banned crates (vendor independence, wgpu/winit only via
+      # platform crates, no C TLS stack), sources.
+      - name: cargo deny
+        run: cargo deny check
+      # The two exception lists must agree, and no exception may be past
+      # its EXPIRES date.
+      - name: Advisory exceptions in sync and unexpired
+        run: bash scripts/check-advisory-exceptions.sh
+      # The vendored Public Suffix List must not go stale: a missing new
+      # suffix means a cookie scoped to it would not be seen as a
+      # supercookie (docs/adr/002-public-suffix-list.md).
+      - name: Public Suffix List snapshot is fresh
+        run: bash scripts/check-psl-freshness.sh
+
+  # -------------------------------------------------------------------
+  # Every crate forbids `unsafe`, but dependencies do not (Boa's GC, the
+  # decoders, TLS). The performance audit found a heap use-after-free in
+  # Boa's thread-exit teardown that only showed as a rare abort in plain
+  # test runs; AddressSanitizer reported it on the first run. The suites
+  # that drive script and page threads run under it, three times over
+  # (the bug class is timing-dependent).
+  sanitizer:
+    name: AddressSanitizer (script, js, engine, integration)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@nightly
+      - uses: Swatinem/rust-cache@v2
+      - name: Tests under AddressSanitizer
+        env:
+          RUSTFLAGS: -Zsanitizer=address
+          ASAN_OPTIONS: detect_leaks=0
+        # Not run here: tests that exhaust a limit by design — JS recursion
+        # depth, loop iterations under a wall-clock bound, and
+        # `integration_tests/tests/stack_depth.rs` (the pipeline on half its
+        # stated stack) — ASan's larger, slower frames reach the stack or
+        # the time bound first. Also the 60 Hz cadence test: a sanitized
+        # frame can take more than half of 16.7 ms, and the frame budget
+        # (ADR 020) then halves the rate, as designed. They run in the plain
+        # release job.
+        run: |
+          for run in 1 2 3; do
+            cargo +nightly test --release --target x86_64-unknown-linux-gnu -p script -p js -p engine -- \
+              --skip infinite_recursion_is_a_bounded_error --skip an_infinite_loop_is_stopped_instead_of_hanging_the_ui_thread \
+              --skip animation_runs_at_most_once_per_frame_interval_however_often_the_host_asks
+            cargo +nightly test --release --target x86_64-unknown-linux-gnu -p integration_tests --lib --test page_display_list
+          done
+
+  # -------------------------------------------------------------------
+  fuzz-smoke:
+    name: Fuzz smoke (libFuzzer, 60 s per target)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@nightly
+      - uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: fuzz
+      - name: Install cargo-fuzz
+        uses: taiki-e/install-action@v2
+        with:
+          tool: cargo-fuzz
+      - name: Fuzz every target against its committed corpus
+        run: bash scripts/fuzz-smoke.sh 60
+      - name: Upload crash artifacts
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: fuzz-crashes-smoke
+          path: fuzz/artifacts/
+          if-no-files-found: ignore

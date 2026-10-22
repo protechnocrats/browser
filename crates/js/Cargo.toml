@@ -1,0 +1,49 @@
+[package]
+name = "js"
+version = "0.1.0"
+edition.workspace = true
+license.workspace = true
+publish = false
+
+# `test-support`: the convenience constructors in `src/test_support.rs`,
+# which mint capabilities. For dev-dependencies and the fuzz workspace only —
+# `scripts/check-capabilities.sh` fails a normal dependency that enables it
+# (ADR 010 §2).
+[features]
+test-support = []
+
+[dependencies]
+capability = { path = "../capability" }
+# Milestone 40 (ADR 023): the runtime interface this crate implements, and
+# the bindings it builds script objects from.
+script = { path = "../script" }
+# Milestone 37: the fingerprint policy, and the time types Boa's host hooks
+# use (the `chrono` Boa already depends on).
+privacy = { path = "../privacy" }
+chrono = { version = "0.4", default-features = false, features = ["clock"] }
+storage = { path = "../storage" }
+diagnostics = { path = "../diagnostics" }
+dom = { path = "../dom" }
+network = { path = "../network" }
+origin = { path = "../origin" }
+# Milestone 38a: 0.22 (from 0.17). No default features, as with 0.17: the
+# defaults would add `Temporal` (whose `Temporal.Now` reads the timezone
+# through its own provider, around the fingerprint policy's host hook),
+# `Float16Array` and `Math.sumPrecise` — new script APIs, which need a
+# policy before they are exposed (ROADMAP.md §7, curated API surface).
+boa_engine = { version = "0.22", default-features = false }
+boa_gc = "0.22"
+
+[lints.rust]
+unsafe_code = "forbid"
+
+# `#[derive(Trace, Finalize)]` with `#[unsafe_ignore_trace]` on fields that
+# hold no GC handle (a wrapper's `ObjectRef`, its host guard): boa_gc's
+# derive macro generates the `unsafe impl Trace`, not this crate's source,
+# so this stays `forbid`-clean. `scripts/check-gc-handles.sh` fails such a
+# field whose type could hold a handle (ADR 023 §5).
+
+[dev-dependencies]
+diagnostics = { path = "../diagnostics", features = ["collector"] }
+script = { path = "../script", features = ["test-runtime"] }
+html_parser = { path = "../html_parser" }

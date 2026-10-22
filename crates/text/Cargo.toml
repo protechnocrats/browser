@@ -1,0 +1,28 @@
+[package]
+name = "text"
+version = "0.1.0"
+edition.workspace = true
+license.workspace = true
+publish = false
+
+[dependencies]
+diagnostics = { path = "../diagnostics" }
+ttf-parser = "0.25"
+wuff = "0.2"
+rustybuzz = "0.20"
+unicode-script = "0.5"
+unicode-properties = { version = "0.1", default-features = false, features = ["general-category"] }
+
+[lints.rust]
+unsafe_code = "forbid"
+
+# Sits on the `rendering` side of the frozen dependency-direction
+# invariant (architecture doc §3, milestone-2 acceptance criteria):
+# glyph *rasterization* (this crate) is platform-agnostic — font
+# parsing and coverage-bitmap generation are pure CPU work. Only the
+# *upload* of a rasterized glyph into a GPU texture (in `gpu_backend`)
+# touches platform. `fontdue` is pure Rust with no `unsafe`, keeping
+# this crate inside `#![forbid(unsafe_code)]`.
+
+[dev-dependencies]
+diagnostics = { path = "../diagnostics", features = ["collector"] }

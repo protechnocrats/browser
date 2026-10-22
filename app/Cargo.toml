@@ -1,0 +1,23 @@
+[package]
+name = "app"
+version = "0.1.0"
+edition.workspace = true
+license.workspace = true
+publish = false
+
+# Milestone 29: a host depends on the engine facade (and Browser Core above
+# it), the shell, and the
+# diagnostics collector (for `--trace`) — never on dom/html_parser/
+# css_parser/style/layout/js directly (enforced by
+# scripts/check-dependency-direction.sh; docs/adr/005-engine-api-shape.md).
+[dependencies]
+diagnostics = { path = "../crates/diagnostics", features = ["collector"] }
+engine = { path = "../crates/engine" }
+# Milestone 36: profiles, sessions (tabs) and settings.
+browser_core = { path = "../crates/browser_core" }
+shell_desktop = { path = "../crates/shell_desktop" }
+# ADR 016: this executable doubles as the page renderer (`--renderer`).
+renderer = { path = "../crates/renderer" }
+
+[lints.rust]
+unsafe_code = "forbid"

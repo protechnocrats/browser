@@ -1,0 +1,10 @@
+# Crates allowed to contain `unsafe` (i.e. exempt from the forbid check in
+# scripts/check-forbid-unsafe.sh). One crate directory name per line.
+#
+# EMPTY ON PURPOSE: every crate in this workspace — core AND platform —
+# currently forbids unsafe_code. The architecture doc (§2) permits `unsafe`
+# in platform-shell crates "at the smallest possible boundary, audited";
+# none has needed it (wgpu's safe `create_surface(Arc<Window>)` covers
+# surface creation). If one ever does, list it here WITH a comment giving
+# the reason and the audited site, so the exception is reviewed rather than
+# silently drifting in.

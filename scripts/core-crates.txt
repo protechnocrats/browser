@@ -1,0 +1,35 @@
+# Core crates: platform-agnostic, memory-safe by construction.
+#
+# One crate directory name (under crates/) per line. This file is the
+# single source of truth read by:
+#   - scripts/check-dependency-direction.sh  (no wgpu/winit, no subscriber)
+#   - scripts/check-forbid-unsafe.sh         (unsafe_code = "forbid")
+#
+# Adding a new crate under crates/ without listing it here OR in
+# scripts/platform-crates.txt fails check-forbid-unsafe.sh — a new crate
+# cannot silently skip the core-crate rules.
+names
+dom
+html_parser
+css_parser
+style
+layout
+text
+images
+network
+webidl
+script
+js
+accessibility
+rendering
+integration_tests
+diagnostics
+pattern
+origin
+engine
+conformance
+storage
+capability
+browser_core
+filter
+privacy

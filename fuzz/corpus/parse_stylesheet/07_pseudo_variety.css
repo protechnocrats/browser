@@ -1,0 +1,1 @@
+a:nth-child(-n+3):not(.x):not(:first-child)::before{content:'\0041'}[data-x^='a' i]{x:y}

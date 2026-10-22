@@ -1,0 +1,3 @@
+session=abc; Path=/; Secure; HttpOnly; Max-Age=3600
+example.com
+/

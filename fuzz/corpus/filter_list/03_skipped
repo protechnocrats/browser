@@ -1,0 +1,5 @@
+##.ad
+example.com##.banner
+/ads?[0-9]+/
+||x.example^$csp=script-src 'none'
+||y.example^$redirect=noop.js

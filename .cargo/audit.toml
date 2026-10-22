@@ -1,0 +1,11 @@
+# cargo-audit policy — Milestone 25. Keep `ignore` identical to the
+# [advisories] ignore list in ../deny.toml (which carries the reasons and
+# expiry dates). Both run in CI (`supply-chain` job).
+
+[advisories]
+ignore = [
+    "RUSTSEC-2024-0436", # paste unmaintained (build-time proc-macro)
+    "RUSTSEC-2026-0192", # ttf-parser unmaintained — accepted, see deny.toml and ADR 009
+]
+# Informational advisories (unmaintained/unsound) that are not listed
+# above are still printed, as warnings, and do not fail the job.

@@ -1,0 +1,1 @@
+clamp(1rem, 2.5vw + 4px, 3rem)

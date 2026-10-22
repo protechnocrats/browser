@@ -1,0 +1,107 @@
+# cargo-deny policy — Milestone 25. Run in CI by the `supply-chain` job
+# (`cargo deny check`). Enforces, mechanically, three things the
+# architecture doc (browser-engine-architecture.md) states as principles:
+#
+#   §1 Vendor-independent  -> [bans] no other browser engine, no
+#                             non-Rust TLS stack, in the dependency tree.
+#   §3 Dependency direction-> [bans] wgpu/winit only via platform crates
+#                             (a second enforcement of
+#                             scripts/check-dependency-direction.sh).
+#   §9 Supply chain        -> [advisories], [licenses], [sources].
+#
+# Every exception below has a reason and (where it is a vulnerability
+# rather than a policy) an EXPIRY. Do not add an exception without both.
+
+[graph]
+# Check the platforms this project targets (§8): Linux, macOS, Windows.
+targets = [
+    "x86_64-unknown-linux-gnu",
+    "aarch64-unknown-linux-gnu",
+    "x86_64-apple-darwin",
+    "aarch64-apple-darwin",
+    "x86_64-pc-windows-msvc",
+]
+
+# ---------------------------------------------------------------------
+[advisories]
+version = 2
+yanked = "deny"
+# `cargo audit` reads its own config (.cargo/audit.toml) — keep the two
+# lists identical (scripts/check-advisory-exceptions.sh verifies this).
+ignore = [
+    { id = "RUSTSEC-2024-0436", reason = "paste is unmaintained (proc-macro, build-time only, via wgpu's metal backend dependency). No runtime code. Replace when its dependents move off it." },
+    { id = "RUSTSEC-2026-0192", reason = "ttf-parser 0.25 is unmaintained. Since M35 it is the engine's parser for untrusted fonts, web fonts included (`text`, and through `rustybuzz`; ADR 009), and it also reaches winit's title-bar font through sctk-adwaita/ab_glyph. Accepted because it has no `unsafe`, parses lazily and bounds composite depth, and is covered by the `font_parse` and `web_font` fuzz targets and the hostile-font tests; web-font bytes are sniffed, size-capped and validated before it sees them. Replacing it (it sits under rustybuzz) is a risk tracked in ROADMAP.md section 7." },
+]
+
+# ---------------------------------------------------------------------
+[licenses]
+version = 2
+# Permissive licenses only, each compatible with the project's
+# GPL-3.0-only (see COPYING). Copyleft (GPL/AGPL/LGPL-only/MPL) is not
+# allowed without an explicit, reasoned exception.
+allow = [
+    "MIT",
+    "Apache-2.0",
+    "Apache-2.0 WITH LLVM-exception",
+    "BSD-2-Clause",
+    "BSD-3-Clause",
+    "ISC",
+    "Zlib",
+    "0BSD",
+    "Unlicense",
+    "CC0-1.0",
+    "BSL-1.0",
+    "Unicode-3.0",
+    "Unicode-DFS-2016",
+    "CDLA-Permissive-2.0", # webpki-roots: the Mozilla CA bundle (data)
+]
+confidence-threshold = 0.9
+
+# Workspace crates are GPL-3.0-only (see COPYING) and `publish = false`,
+# which `private` covers.
+[licenses.private]
+ignore = true
+
+# ---------------------------------------------------------------------
+[bans]
+multiple-versions = "warn"
+wildcards = "allow"
+highlight = "all"
+
+deny = [
+    # §3: the GPU/windowing stack is reachable ONLY through the platform
+    # crates. `wrappers` = the crates allowed to depend on it directly.
+    { crate = "wgpu", wrappers = ["gpu_backend"], reason = "GPU API is a platform-layer concern (architecture doc §3); core crates must not import it." },
+    { crate = "winit", wrappers = ["gpu_backend", "shell_desktop"], reason = "Windowing is a platform-layer concern (architecture doc §3)." },
+    # ADR 016: the renderer sandbox's system-call crates, only behind `sandbox`.
+    { crate = "landlock", wrappers = ["sandbox"], reason = "OS sandboxing is a platform concern (ADR 016); only the sandbox crate may use it." },
+    { crate = "seccompiler", wrappers = ["sandbox"], reason = "OS sandboxing is a platform concern (ADR 016); only the sandbox crate may use it." },
+
+    # §1 vendor independence: no other browser engine or embedded web
+    # view underneath ours, ever. "No Blink, Gecko, or WebKit dependency."
+    { crate = "wry", reason = "Embeds the OS web view (WebKit/WebView2) — a different engine (§1)." },
+    { crate = "webkit2gtk", reason = "Embeds WebKit (§1)." },
+    { crate = "webkit2gtk-sys", reason = "Embeds WebKit (§1)." },
+    { crate = "javascriptcore-rs", reason = "WebKit's JS engine; JS is Boa behind a runtime interface (§2)." },
+    { crate = "cef", reason = "Chromium Embedded Framework — Blink (§1)." },
+    { crate = "cef-sys", reason = "Chromium Embedded Framework — Blink (§1)." },
+    { crate = "webview2-com", reason = "Embeds Edge/Chromium WebView2 — Blink (§1)." },
+    { crate = "servo", reason = "Another engine; this project is its own (§1)." },
+    { crate = "headless_chrome", reason = "Drives Chromium (§1)." },
+    { crate = "chromiumoxide", reason = "Drives Chromium (§1)." },
+    { crate = "thirtyfour", reason = "WebDriver — drives someone else's browser (§1)." },
+
+    # §2 memory safety / minimal unsafe surface: TLS stays on rustls. The
+    # single documented exception is rustls' `ring` provider (see
+    # crates/network/src/lib.rs); a second, C-based TLS stack is not.
+    { crate = "openssl", reason = "C TLS stack; TLS is rustls (§2, network crate docs)." },
+    { crate = "openssl-sys", reason = "C TLS stack; TLS is rustls (§2, network crate docs)." },
+    { crate = "native-tls", reason = "Delegates to the OS/OpenSSL TLS stack; TLS is rustls (§2)." },
+]
+
+# ---------------------------------------------------------------------
+[sources]
+unknown-registry = "deny"
+unknown-git = "deny"
+allow-registry = ["https://github.com/rust-lang/crates.io-index"]
+allow-git = []

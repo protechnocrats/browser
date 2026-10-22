@@ -1,0 +1,7 @@
+browser-engine settings 1
+scroll.speed = NaN
+zoom.default = 1e39
+scroll.speed = -0
+zoom.default = inf
+= =
+scroll.invert = TRUE
