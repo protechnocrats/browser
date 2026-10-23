@@ -54,6 +54,11 @@ write("parse_stylesheet", "04_unterminated.css", "p{color:red;" + "q{" * 50 + "/
 write("parse_stylesheet", "05_oversized_values.css",
       "p{font-size:99999999999999px;width:1e308px;height:-1e308px;margin:calc(1px + 2 * (3px")
 write("parse_stylesheet", "06_huge_selector_list.css", ",".join(f".c{i}" for i in range(2000)) + "{a:b}")
+# Found by the fuzzer: a parent with an unclosed `(` hid its expansion's
+# commas from the nested-selector count, so each nested level multiplied the
+# selector text 100x (5 KB of CSS -> ~800 MB).
+_list = ",".join(f".c{i}" for i in range(100))
+write("parse_stylesheet", "08_nesting_unclosed_paren.css", "a:not( {" + (_list + " {") * 4 + " x: 1 " + "}" * 5)
 write("parse_stylesheet", "07_pseudo_variety.css",
       "a:nth-child(-n+3):not(.x):not(:first-child)::before{content:'\\0041'}[data-x^='a' i]{x:y}")
 

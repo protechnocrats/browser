@@ -99,12 +99,13 @@ pub fn decode_png(bytes: &[u8]) -> Result<DecodedImage, DecodeError> {
 }
 
 pub fn decode_jpeg(bytes: &[u8]) -> Result<DecodedImage, DecodeError> {
+    use zune_core::bytestream::ZCursor;
     use zune_core::colorspace::ColorSpace;
     use zune_core::options::DecoderOptions;
     use zune_jpeg::JpegDecoder;
 
     let options = DecoderOptions::default().jpeg_set_out_colorspace(ColorSpace::RGBA);
-    let mut decoder = JpegDecoder::new_with_options(bytes, options);
+    let mut decoder = JpegDecoder::new_with_options(ZCursor::new(bytes), options);
     let rgba = decoder.decode().map_err(|e| DecodeError::Jpeg(e.to_string()))?;
     let info = decoder
         .info()
@@ -613,6 +614,15 @@ mod tests {
         let (result, c) = capture(|| decode_png(&bomb));
         assert!(matches!(result, Err(DecodeError::Png(_))), "{result:?}");
         assert!(c.saw_guard(Guard::ImageDimensions), "{result:?} {:?}", c.events);
+    }
+
+    /// Regression (fuzz target `decode_auto`): this JPEG's entropy-coded
+    /// data runs out mid-symbol, which tripped a debug assertion in
+    /// `zune-jpeg` 0.4 (`bits_left >= n`). 0.5 dropped the assertion as a
+    /// known false positive and saturates, as 0.4 did in release builds.
+    #[test]
+    fn a_jpeg_whose_bitstream_runs_out_mid_symbol_does_not_panic() {
+        let _ = decode_jpeg(&read_fixture("jpeg_bitstream_underrun.jpg"));
     }
 
     #[test]

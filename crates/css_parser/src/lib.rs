@@ -705,6 +705,14 @@ fn read_block(chars: &mut std::iter::Peekable<std::str::Chars>) -> (String, bool
 /// multiplies): past it the nested rule is dropped.
 const MAX_NESTED_SELECTORS: usize = 256;
 
+/// Most text one nested rule's selector list may expand to. The count
+/// above is not enough: a selector with an unclosed `(` hides the commas
+/// after it from `split_top_level`, so `P c1, P c2, …` counts as ONE parent
+/// at the next level while its text still multiplies by every level's child
+/// count — and each `&` in a child is another copy of the parent (found by
+/// the `parse_stylesheet` fuzz target: 5 KB of CSS expanded to ~800 MB).
+const MAX_NESTED_SELECTOR_BYTES: usize = 64 * 1024;
+
 /// One style rule: its own declarations, then its nested rules (CSS
 /// Nesting 1) flattened into ordinary rules — `.a { .b {…} }` is
 /// `.a .b {…}`, `&` stands for the parent (`.a { &:hover {…} }` is
@@ -788,7 +796,7 @@ fn split_nested_rules(body: &str) -> (String, Vec<(String, String)>) {
 
 /// The selector list of a nested rule, written out in full against its
 /// parent's (`None` when there is nothing to match or it would expand
-/// past [`MAX_NESTED_SELECTORS`]).
+/// past [`MAX_NESTED_SELECTORS`] or [`MAX_NESTED_SELECTOR_BYTES`]).
 fn nest_selectors(parent: &str, nested: &str) -> Option<String> {
     let parents = split_top_level(parent, ',');
     let children = split_top_level(nested, ',');
@@ -797,8 +805,17 @@ fn nest_selectors(parent: &str, nested: &str) -> Option<String> {
         return None;
     }
     let mut combined = Vec::new();
+    let mut bytes = 0usize;
     for parent in parents.iter().map(|p| p.trim()).filter(|p| !p.is_empty()) {
         for child in children.iter().map(|c| c.trim()).filter(|c| !c.is_empty()) {
+            // Sized before building, so one `&&&…` child cannot allocate
+            // past the cap either.
+            let copies = child.matches('&').count().max(1);
+            bytes = bytes.saturating_add(child.len() + 2).saturating_add(copies.saturating_mul(parent.len() + 1));
+            if bytes > MAX_NESTED_SELECTOR_BYTES {
+                diagnostics::guard(diagnostics::Guard::CssAtRuleNestingDepth, "nested selector text too large; rule dropped");
+                return None;
+            }
             combined.push(if child.contains('&') { child.replace('&', parent) } else { format!("{parent} {child}") });
         }
     }
@@ -1687,6 +1704,27 @@ mod tests {
         assert_eq!(hover.selectors[0].compounds[0].classes, vec!["a".to_string()]);
         assert_eq!(sheet.rules[2].selectors[0].combinators, vec![Combinator::Child]);
         assert_eq!(sheet.rules[3].selectors[1].compounds[0].classes, vec!["b".to_string(), "d".to_string()]);
+    }
+
+    /// Regression (fuzz target `parse_stylesheet`): a parent with an
+    /// unclosed `(` hides the commas of its expansion, so every level
+    /// counted as one parent and passed the selector-count cap while the
+    /// text grew 100x per level. The text cap stops it at the second level.
+    #[test]
+    fn nesting_under_an_unclosed_paren_cannot_multiply_selector_text() {
+        use diagnostics::{collector::capture, Guard};
+        let list = (0..100).map(|i| format!(".c{i}")).collect::<Vec<_>>().join(",");
+        let css = format!("a:not( {{ {list} {{ {list} {{ {list} {{ {list} {{ x: 1 }} }} }} }} }}");
+        let start = std::time::Instant::now();
+        let (_, c) = capture(|| parse_stylesheet(&css));
+        assert!(c.saw_guard(Guard::CssAtRuleNestingDepth), "{:?}", c.events);
+        assert!(start.elapsed() < std::time::Duration::from_secs(1), "{:?}", start.elapsed());
+
+        // `&` copies the parent: many of them in one child are sized first.
+        let amps = format!(".{} {{ {} {{ x: 1 }} }}", "a".repeat(1000), "&".repeat(1000));
+        let (sheet, c) = capture(|| parse_stylesheet(&amps));
+        assert!(c.saw_guard(Guard::CssAtRuleNestingDepth));
+        assert_eq!(sheet.rules.len(), 1, "the parent rule survives; the nested one is dropped");
     }
 
     #[test]
