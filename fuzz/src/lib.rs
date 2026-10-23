@@ -480,17 +480,23 @@ pub fn js_script(data: &[u8]) {
     }
     let document = std::rc::Rc::new(std::cell::RefCell::new(dom::Document::new(body)));
     let network = network::NetworkContext::with_route(|_store| std::sync::Arc::new(NoNetwork));
-    let mut env = js::JsEnvironment::new_with_network(std::rc::Rc::clone(&document), Some("https://fuzz.test/"), network);
-    let _ = env.run_script(s);
-    let ids: Vec<dom::NodeId> = ["a", "i", "l"].iter().filter_map(|id| document.borrow().node_id_of(id)).collect();
-    env.dispatch_click(&ids);
-    env.set_focus(Some("i".into()));
-    for key in ["x", "Backspace", "Enter", "ArrowLeft"] {
-        env.dispatch_keydown(key);
+    {
+        let mut env = js::JsEnvironment::new_with_network(std::rc::Rc::clone(&document), Some("https://fuzz.test/"), network);
+        let _ = env.run_script(s);
+        let ids: Vec<dom::NodeId> = ["a", "i", "l"].iter().filter_map(|id| document.borrow().node_id_of(id)).collect();
+        env.dispatch_click(&ids);
+        env.set_focus(Some("i".into()));
+        for key in ["x", "Backspace", "Enter", "ArrowLeft"] {
+            env.dispatch_keydown(key);
+        }
+        env.run_animation_frame_callbacks(16.0);
+        env.poll_pending_fetches();
+        let _ = env.take_pending_navigation();
     }
-    env.run_animation_frame_callbacks(16.0);
-    env.poll_pending_fetches();
-    let _ = env.take_pending_navigation();
+    // As a page thread does when its page goes: free the script heap now.
+    // Boa collects lazily, so without this libFuzzer's per-input leak check
+    // reports whatever the script left reachable from its global object.
+    js::collect_garbage();
 }
 
 /// Milestone 40 (ADR 023): the WebIDL subset the bindings are declared in.

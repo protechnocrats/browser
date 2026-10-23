@@ -281,10 +281,23 @@ impl Face {
     }
 }
 
+/// Whether a `ttcf` header's offset table fits in the file (anything that
+/// is not a collection passes). `ttf-parser` reads the whole table in one
+/// go and debug-asserts its length fits in 4 GiB, so a header claiming
+/// billions of fonts must be refused before the parser sees it (found by
+/// the `font_parse` fuzz target).
+pub(crate) fn collection_header_fits(bytes: &[u8]) -> bool {
+    // tag, version, numFonts, then one u32 offset per font.
+    ttf_parser::fonts_in_collection(bytes).is_none_or(|n| 12 + 4 * u64::from(n) <= bytes.len() as u64)
+}
+
 /// Parses what matching and layout need, and rejects what cannot draw text.
 fn inspect(bytes: &[u8], index: u32) -> Result<(FaceInfo, Metrics), FontError> {
     if bytes.len() > MAX_FONT_BYTES {
         return Err(FontError::TooLarge(bytes.len()));
+    }
+    if !collection_header_fits(bytes) {
+        return Err(FontError::Malformed("font collection header is larger than the file".into()));
     }
     let face = ttf_parser::Face::parse(bytes, index).map_err(|e| FontError::Malformed(e.to_string()))?;
     if face.number_of_glyphs() == 0 {

@@ -71,6 +71,10 @@ pub fn decode_png(bytes: &[u8]) -> Result<DecodedImage, DecodeError> {
     // still needs to handle is just "how many channels, in what order".
     decoder.set_transformations(png::Transformations::normalize_to_color8());
     let mut reader = decoder.read_info().map_err(|e| DecodeError::Png(e.to_string()))?;
+    // `png`'s own `Limits` bound only ITS allocations, not the output
+    // buffer we allocate below from the header's declared size.
+    let (width, height) = reader.info().size();
+    check_decode_dimensions(width, height, DecodeError::Png)?;
 
     let mut buf = vec![0u8; reader.output_buffer_size()];
     let info = reader.next_frame(&mut buf).map_err(|e| DecodeError::Png(e.to_string()))?;
@@ -127,9 +131,10 @@ pub fn decode_gif(bytes: &[u8]) -> Result<DecodedImage, DecodeError> {
 }
 
 /// Cap on decoded pixel count, shared by every format that doesn't
-/// already enforce one of its own (`png`'s 64MB `Limits::bytes`
-/// default, `zune-jpeg`'s 16384x16384 default max dimensions). Without
-/// a cap, a WebP header can declare an enormous canvas in a
+/// already enforce one of its own (`zune-jpeg`'s 16384x16384 default max
+/// dimensions, `gif`'s 50MB memory limit). PNG needs it too: `png`'s
+/// `Limits::bytes` does not cover the caller's output buffer. Without
+/// a cap, a PNG or WebP header can declare an enormous canvas in a
 /// few-byte file and force a multi-gigabyte allocation before any real
 /// frame data is even validated — a classic decompression-bomb DoS.
 const MAX_DECODED_PIXELS: u64 = 16384 * 16384;
@@ -137,13 +142,14 @@ const MAX_DECODED_PIXELS: u64 = 16384 * 16384;
 /// Refuses an image whose DECLARED pixel count exceeds
 /// `MAX_DECODED_PIXELS`, before any pixel buffer is allocated — reporting
 /// the `ImageDimensions` guard. Split out of `decode_webp` so the cap is
-/// testable directly: `image-webp` rejects a bare VP8X header bomb in its
+/// testable directly — and `err` names the format being decoded:
+/// `image-webp` rejects a bare VP8X header bomb in its
 /// own header validation before this is ever reached, so only a
 /// well-formed animated WebP with a huge canvas gets here.
-fn check_decode_dimensions(width: u32, height: u32) -> Result<(), DecodeError> {
+fn check_decode_dimensions(width: u32, height: u32, err: fn(String) -> DecodeError) -> Result<(), DecodeError> {
     if (width as u64) * (height as u64) > MAX_DECODED_PIXELS {
         diagnostics::guard(diagnostics::Guard::ImageDimensions, "declared pixel count exceeds the decode cap");
-        return Err(DecodeError::Webp(format!("image dimensions {width}x{height} exceed the decode size limit")));
+        return Err(err(format!("image dimensions {width}x{height} exceed the decode size limit")));
     }
     Ok(())
 }
@@ -154,7 +160,7 @@ pub fn decode_webp(bytes: &[u8]) -> Result<DecodedImage, DecodeError> {
     let mut decoder = image_webp::WebPDecoder::new(std::io::Cursor::new(bytes))
         .map_err(|e| DecodeError::Webp(e.to_string()))?;
     let (width, height) = decoder.dimensions();
-    check_decode_dimensions(width, height)?;
+    check_decode_dimensions(width, height, DecodeError::Webp)?;
     // Belt-and-suspenders: also cap the decoder's own internal
     // allocations (ICCP/EXIF/XMP chunks, its internal working buffers),
     // independent of the dimension check above.
@@ -596,6 +602,19 @@ mod tests {
         assert!(decode_png(&garbage).is_err());
     }
 
+    /// Regression (fuzz target `decode_auto`): a well-formed PNG (valid
+    /// CRCs, real IDAT) whose IHDR declares 3 x 4294443012 pixels made us
+    /// allocate a ~51 GB output buffer — `png`'s own limits do not cover
+    /// it. The pixel cap refuses it first, as a PNG error.
+    #[test]
+    fn a_png_declaring_billions_of_pixels_is_refused_before_allocating() {
+        use diagnostics::{collector::capture, Guard};
+        let bomb = read_fixture("png_header_bomb_valid_crc.png");
+        let (result, c) = capture(|| decode_png(&bomb));
+        assert!(matches!(result, Err(DecodeError::Png(_))), "{result:?}");
+        assert!(c.saw_guard(Guard::ImageDimensions), "{result:?} {:?}", c.events);
+    }
+
     #[test]
     fn decode_jpeg_on_non_jpeg_bytes_errors_not_panics() {
         let garbage = vec![0u8; 100];
@@ -772,17 +791,17 @@ mod tests {
     #[test]
     fn the_pixel_cap_refuses_and_reports_the_dimension_guard() {
         use diagnostics::{collector::capture, Guard};
-        let (result, c) = capture(|| check_decode_dimensions(1 << 24, 1 << 24));
+        let (result, c) = capture(|| check_decode_dimensions(1 << 24, 1 << 24, DecodeError::Webp));
         assert!(result.is_err());
         assert!(c.saw_guard(Guard::ImageDimensions), "{:?}", c.events);
 
         // At the cap exactly is fine, and trips nothing.
-        let (result, c) = capture(|| check_decode_dimensions(16384, 16384));
+        let (result, c) = capture(|| check_decode_dimensions(16384, 16384, DecodeError::Webp));
         assert!(result.is_ok());
         assert!(c.events.is_empty());
         // One pixel over trips it (and the product cannot overflow u32 math).
-        assert!(check_decode_dimensions(16385, 16384).is_err());
-        assert!(check_decode_dimensions(u32::MAX, u32::MAX).is_err());
+        assert!(check_decode_dimensions(16385, 16384, DecodeError::Webp).is_err());
+        assert!(check_decode_dimensions(u32::MAX, u32::MAX, DecodeError::Webp).is_err());
     }
 
     #[test]

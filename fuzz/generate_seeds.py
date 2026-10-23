@@ -161,6 +161,9 @@ write("font_parse", "03_truetype_magic_only", b"\x00\x01\x00\x00" + b"\x00" * 60
 write("font_parse", "04_otto_huge_table_count", b"OTTO\xff\xff" + b"\x00" * 58)
 write("font_parse", "05_woff_header", b"wOFF\x00\x01\x00\x00" + b"\xff" * 40)
 write("font_parse", "06_empty", b"")
+# Found by the fuzzer: a collection header claiming 2^32-1 fonts tripped
+# ttf-parser's length debug-assert reading the offset table.
+write("font_parse", "09_ttc_huge_font_count", b"ttcf\x00\x01\x00\x00\xff\xff\xff\xff" + b"\xff" * 52)
 
 # ---- font_face_src
 write("font_face_src", "01_typical", "local(\"Open Sans\"), url(/f/open.woff2) format(\"woff2\"), url('/f/open.woff') format('woff')")

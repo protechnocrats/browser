@@ -819,6 +819,23 @@ mod tests {
         assert!(rx.recv_timeout(std::time::Duration::from_secs(10)).is_ok(), "the corrupted font must not hang");
     }
 
+    /// Regression (fuzz target `font_parse`): a `ttcf` header claiming
+    /// 2^32-1 fonts tripped `ttf-parser`'s length debug-assert when it read
+    /// the offset table. It is refused as malformed before parsing; a real
+    /// collection header (one font, offset table inside the file) is not.
+    #[test]
+    fn a_collection_header_claiming_more_fonts_than_the_file_holds_is_refused() {
+        let mut bomb = b"ttcf\x00\x01\x00\x00\xff\xff\xff\xff".to_vec();
+        bomb.resize(64, 0xff);
+        assert!(Font::from_bytes(&bomb).is_err());
+        assert!(!face::collection_header_fits(&bomb));
+        let mut one = b"ttcf\x00\x01\x00\x00\x00\x00\x00\x01\x00\x00\x00\x10".to_vec();
+        assert!(face::collection_header_fits(&one));
+        one.truncate(15);
+        assert!(!face::collection_header_fits(&one));
+        assert!(face::collection_header_fits(include_bytes!("../assets/DejaVuSans.ttf")), "not a collection");
+    }
+
     /// The hostile input the 2026-09-24 audit measured: every letter and
     /// digit at the largest allowed size. Uncapped, 20 of them grew the
     /// atlas past 16,384 px — beyond every GPU's texture limit.
