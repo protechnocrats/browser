@@ -71,15 +71,42 @@ pub struct QuotaExceeded;
 /// other page's storage with it (ADR 007).
 #[derive(Clone)]
 pub struct StorageArea {
-    entries: Arc<Mutex<HashMap<String, String>>>,
-    /// The owning store's "something changed" flag (`None`: an area no
-    /// store persists).
-    dirty: Option<Arc<AtomicBool>>,
+    backing: Backing,
+}
+
+#[derive(Clone)]
+enum Backing {
+    /// In this process.
+    Local {
+        entries: Arc<Mutex<HashMap<String, String>>>,
+        /// The owning store's "something changed" flag (`None`: an area no
+        /// store persists).
+        dirty: Option<Arc<AtomicBool>>,
+    },
+    /// Milestone 41: in another process, which checks and serves every
+    /// operation (a renderer's `localStorage` is the browser process's).
+    Remote { areas: Arc<dyn RemoteAreas>, key: StorageKey },
+}
+
+/// Storage areas kept by another process — what a renderer's store is
+/// (Milestone 41, ADR 025 §4): every operation goes to the browser process,
+/// which holds the profile's store, checks that the renderer may reach the
+/// key, and answers. A remote that cannot answer reads as empty and refuses
+/// writes (as a full quota would).
+pub trait RemoteAreas: Send + Sync {
+    fn get(&self, key: &StorageKey, name: &str) -> Option<String>;
+    fn set(&self, key: &StorageKey, name: String, value: String) -> Result<(), QuotaExceeded>;
+    fn remove(&self, key: &StorageKey, name: &str);
+    fn clear(&self, key: &StorageKey);
+    fn len(&self, key: &StorageKey) -> usize;
 }
 
 impl std::fmt::Debug for StorageArea {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        f.debug_struct("StorageArea").field("entries", &self.len()).finish()
+        match &self.backing {
+            Backing::Local { entries, .. } => f.debug_struct("StorageArea").field("entries", &lock(entries).len()).finish(),
+            Backing::Remote { key, .. } => f.debug_struct("StorageArea").field("remote", key).finish(),
+        }
     }
 }
 
@@ -87,17 +114,18 @@ impl StorageArea {
     /// An area of its own: shared with nothing, persisted nowhere (an
     /// opaque origin's `localStorage`, a page's `sessionStorage`).
     pub fn private() -> StorageArea {
-        StorageArea { entries: Arc::default(), dirty: None }
+        StorageArea::local(None)
     }
 
-    fn touched(&self) {
-        if let Some(dirty) = &self.dirty {
-            dirty.store(true, Ordering::Release);
-        }
+    fn local(dirty: Option<Arc<AtomicBool>>) -> StorageArea {
+        StorageArea { backing: Backing::Local { entries: Arc::default(), dirty } }
     }
 
     pub fn get(&self, key: &str) -> Option<String> {
-        lock(&self.entries).get(key).cloned()
+        match &self.backing {
+            Backing::Local { entries, .. } => lock(entries).get(key).cloned(),
+            Backing::Remote { areas, key: area } => areas.get(area, key),
+        }
     }
 
     /// Stores `value` under `key`, unless that takes the area past
@@ -105,55 +133,87 @@ impl StorageArea {
     /// `storage_quota_exceeded` guard is reported, and `Err` is returned
     /// (script sees a `QuotaExceededError`).
     pub fn set(&self, key: String, value: String) -> Result<(), QuotaExceeded> {
-        let mut entries = lock(&self.entries);
-        let replaced = entries.get(&key).map_or(0, |old| key.len() + old.len());
-        if bytes_of(&entries) - replaced + key.len() + value.len() > MAX_STORAGE_BYTES {
+        let (entries, dirty) = match &self.backing {
+            Backing::Local { entries, dirty } => (entries, dirty),
+            Backing::Remote { areas, key: area } => return areas.set(area, key, value),
+        };
+        let mut map = lock(entries);
+        let replaced = map.get(&key).map_or(0, |old| key.len() + old.len());
+        if bytes_of(&map) - replaced + key.len() + value.len() > MAX_STORAGE_BYTES {
             diagnostics::guard(diagnostics::Guard::StorageQuotaExceeded, "storage write refused: quota exceeded");
             return Err(QuotaExceeded);
         }
-        entries.insert(key, value);
-        drop(entries);
-        self.touched();
+        map.insert(key, value);
+        drop(map);
+        touched(dirty);
         Ok(())
     }
 
     pub fn remove(&self, key: &str) {
-        if lock(&self.entries).remove(key).is_some() {
-            self.touched();
+        match &self.backing {
+            Backing::Local { entries, dirty } => {
+                if lock(entries).remove(key).is_some() {
+                    touched(dirty);
+                }
+            }
+            Backing::Remote { areas, key: area } => areas.remove(area, key),
         }
     }
 
     pub fn clear(&self) {
-        let mut entries = lock(&self.entries);
-        if !entries.is_empty() {
-            entries.clear();
-            drop(entries);
-            self.touched();
+        match &self.backing {
+            Backing::Local { entries, dirty } => {
+                let mut map = lock(entries);
+                if !map.is_empty() {
+                    map.clear();
+                    drop(map);
+                    touched(dirty);
+                }
+            }
+            Backing::Remote { areas, key: area } => areas.clear(area),
         }
     }
 
     pub fn len(&self) -> usize {
-        lock(&self.entries).len()
+        match &self.backing {
+            Backing::Local { entries, .. } => lock(entries).len(),
+            Backing::Remote { areas, key: area } => areas.len(area),
+        }
     }
 
     pub fn is_empty(&self) -> bool {
         self.len() == 0
     }
 
-    /// Keys + values, in bytes — what the quota counts.
+    /// Keys + values, in bytes — what the quota counts (0 for a remote
+    /// area: its quota is kept where it lives).
     pub fn bytes(&self) -> usize {
-        bytes_of(&lock(&self.entries))
+        match &self.backing {
+            Backing::Local { entries, .. } => bytes_of(&lock(entries)),
+            Backing::Remote { .. } => 0,
+        }
     }
 
     /// Whether `self` and `other` are the same area (not equal contents).
     pub fn same_area(&self, other: &StorageArea) -> bool {
-        Arc::ptr_eq(&self.entries, &other.entries)
+        match (&self.backing, &other.backing) {
+            (Backing::Local { entries: a, .. }, Backing::Local { entries: b, .. }) => Arc::ptr_eq(a, b),
+            (Backing::Remote { areas: a, key: x }, Backing::Remote { areas: b, key: y }) => Arc::ptr_eq(a, b) && x == y,
+            _ => false,
+        }
     }
 
     fn entries_sorted(&self) -> Vec<(String, String)> {
-        let mut entries: Vec<(String, String)> = lock(&self.entries).iter().map(|(k, v)| (k.clone(), v.clone())).collect();
+        let Backing::Local { entries, .. } = &self.backing else { return Vec::new() };
+        let mut entries: Vec<(String, String)> = lock(entries).iter().map(|(k, v)| (k.clone(), v.clone())).collect();
         entries.sort();
         entries
+    }
+}
+
+fn touched(dirty: &Option<Arc<AtomicBool>>) {
+    if let Some(dirty) = dirty {
+        dirty.store(true, Ordering::Release);
     }
 }
 
@@ -196,12 +256,23 @@ struct StoreInner {
     dirty: Arc<AtomicBool>,
     /// Where [`StorageStore::flush`] writes (`None`: memory only).
     path: Mutex<Option<PathBuf>>,
+    /// Milestone 41: the process that keeps this store's areas, if not this
+    /// one.
+    remote: Option<Arc<dyn RemoteAreas>>,
 }
 
 impl StorageStore {
     /// A store that lives as long as its handles do, in memory only.
     pub fn new() -> StorageStore {
         StorageStore::default()
+    }
+
+    /// A store whose shareable areas are kept by another process (Milestone
+    /// 41: a renderer's, served by the browser process). An opaque origin's
+    /// area is still private and local — it is shared with nothing, so there
+    /// is nothing to ask for.
+    pub fn remote(areas: Arc<dyn RemoteAreas>) -> StorageStore {
+        StorageStore { inner: Arc::new(StoreInner { remote: Some(areas), ..StoreInner::default() }) }
     }
 
     /// A store persisted at `path`: what the file holds is loaded now (a
@@ -233,6 +304,9 @@ impl StorageStore {
         if !key.is_shareable() {
             return StorageArea::private();
         }
+        if let Some(remote) = &self.inner.remote {
+            return StorageArea { backing: Backing::Remote { areas: Arc::clone(remote), key: key.clone() } };
+        }
         let mut areas = lock(&self.inner.areas);
         if let Some(area) = areas.get(key) {
             return area.clone();
@@ -240,7 +314,7 @@ impl StorageStore {
         if areas.len() >= MAX_STORAGE_ORIGINS {
             return StorageArea::private();
         }
-        let area = StorageArea { entries: Arc::default(), dirty: Some(Arc::clone(&self.inner.dirty)) };
+        let area = StorageArea::local(Some(Arc::clone(&self.inner.dirty)));
         areas.insert(key.clone(), area.clone());
         area
     }
@@ -586,5 +660,47 @@ mod tests {
         }
         assert_eq!(unescape("trailing\\"), None);
         assert_eq!(unescape("\\x"), None);
+    }
+
+    /// Milestone 41: a remote store's shareable areas are the other
+    /// process's — every operation reaches it — while an opaque origin's
+    /// area stays private and local.
+    #[test]
+    fn a_remote_stores_areas_are_kept_by_the_remote() {
+        struct Remote(StorageStore, std::sync::atomic::AtomicUsize);
+        impl RemoteAreas for Remote {
+            fn get(&self, key: &StorageKey, name: &str) -> Option<String> {
+                self.1.fetch_add(1, Ordering::Relaxed);
+                self.0.area_for(key).get(name)
+            }
+            fn set(&self, key: &StorageKey, name: String, value: String) -> Result<(), QuotaExceeded> {
+                self.1.fetch_add(1, Ordering::Relaxed);
+                self.0.area_for(key).set(name, value)
+            }
+            fn remove(&self, key: &StorageKey, name: &str) {
+                self.0.area_for(key).remove(name)
+            }
+            fn clear(&self, key: &StorageKey) {
+                self.0.area_for(key).clear()
+            }
+            fn len(&self, key: &StorageKey) -> usize {
+                self.0.area_for(key).len()
+            }
+        }
+        let profile = StorageStore::new();
+        let remote = Arc::new(Remote(profile.clone(), Default::default()));
+        let renderer = StorageStore::remote(remote.clone());
+        let key = StorageKey::first_party(&Origin::parse("https://a.example/"));
+        renderer.area_for(&key).set("k".into(), "v".into()).unwrap();
+        assert_eq!(profile.area_for(&key).get("k").as_deref(), Some("v"), "written where the remote keeps it");
+        assert_eq!(renderer.area_for(&key).get("k").as_deref(), Some("v"));
+        assert_eq!(renderer.area_for(&key).len(), 1);
+        assert_eq!(renderer.origin_count(), 0, "nothing kept locally");
+        assert!(renderer.area_for(&key).same_area(&renderer.area_for(&key)));
+        let opaque = StorageKey::first_party(&Origin::new_opaque());
+        renderer.area_for(&opaque).set("x".into(), "y".into()).unwrap();
+        assert_eq!(remote.1.load(Ordering::Relaxed), 2, "one set and one get; an opaque origin's area never goes to the remote");
+        renderer.area_for(&key).clear();
+        assert!(profile.area_for(&key).is_empty());
     }
 }

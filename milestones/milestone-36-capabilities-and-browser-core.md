@@ -1,10 +1,11 @@
 # Milestone 36 — Capability layer & Browser Core seed
 
-> **Status:** Done, with gaps (2026-10-11). **Still open:** local storage
+> **Status:** Done, with gaps (2026-10-11). **Still open:** ~~local storage
 > persists only in thread mode (`--single-process`) — in process mode each
 > renderer keeps it in memory, as before → **M41** (storage served by the
 > browser process); in process mode the network capability is enforced
-> inside the renderer, not by the browser → **M41**; ~~grants are not
+> inside the renderer, not by the browser → **M41**~~ — both done in M41
+> (ADR 025); ~~grants are not
 > re-issued to a live page~~ (done in the gap pass: `PageCommand::Grant`,
 > `Session::grant`, ADR 010 §4 amended); the permissions that
 > can be decided (clipboard, location, camera, microphone, notifications)

@@ -164,7 +164,9 @@ and never a value outside its range, and reports `profile_file_rejected`.
 
 Local storage persists only in thread mode in M36: in process mode each
 renderer keeps its storage in memory, as before (process isolation's open
-item), until M41 serves storage from the browser process.
+item), until M41 serves storage from the browser process. *(M41, ADR 025 §4: it does — a renderer's store is
+`StorageStore::remote`, every operation answered by the browser through the
+page's own grant, so it persists in both modes.)*
 
 ## Extension hook points (designed, not built)
 
@@ -203,4 +205,7 @@ same token as every other capability, and audited.
   compromised renderer can make any request its document loader could (the
   host's origin lock still applies). Enforcing script network access in the
   browser process needs requests the renderer cannot mislabel — M41's
-  site-per-process work is where that boundary moves.
+  site-per-process work is where that boundary moves. *(M41, ADR 025 §5: the browser keeps the page's
+  grants; without the network one it makes only the document loader's
+  requests, and of a cross-origin response it gives a renderer only what the
+  request's stated purpose can use, so a mislabelled request gains nothing.)*

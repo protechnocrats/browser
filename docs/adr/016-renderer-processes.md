@@ -7,6 +7,10 @@
 - **Constrains:** `engine` (a second transport behind the same API), a new
   `renderer` host binary, a new `sandbox` platform crate, hosts that create
   engines (`app`), and every message that crosses the process boundary.
+- **Amended by:** ADR 025 (Milestone 41): a renderer holds documents of one
+  site, a page moves to another renderer when a navigation lands on another
+  site, `localStorage` is served by the browser process, and the browser
+  enforces the page's network grant (§1, §5 and the first Consequence below).
 - **Supersedes:** the "multi-process sandboxing: deliberately not planned"
   line of `ROADMAP.md` §4, and the "thread isolation now … OS-process
   isolation later" note of architecture doc §4.
@@ -85,7 +89,7 @@ make that move urgent rather than eventual:
 - `localStorage` is per renderer process until storage moves into the host
   (M36 already puts storage under the profile in Browser Core): two pages of
   one origin no longer share it in process mode. Thread mode keeps the
-  shared store.
+  shared store. *(Since M41 the browser process serves it: ADR 025 §4.)*
 - `EngineConfig` gains `isolation`; `Engine::renderer_pid` exposes a page's
   process for diagnostics.
 - New dependencies, in the `sandbox` platform crate only: `landlock` (MIT OR

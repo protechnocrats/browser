@@ -140,7 +140,11 @@ and real specialized inputs (Milestone 19) to navigate FROM correctly.
   post-redirect final URL (`fetch_page` doesn't report that back out
   today) — relative link/action resolution immediately after a
   cross-path redirect could be slightly off. Bounded, not silent; see
-  `pending_nav`'s own doc comment in `main.rs`.
+  `pending_nav`'s own doc comment in `main.rs`. *(Closed in M41: a
+  navigation's result carries the URL it landed on, which becomes
+  `current_url`, names the document's origin and is the URL
+  `NavigationCommitted` reports — site isolation had made the old name
+  matter, refusing a redirected page's script in process mode.)*
 - **Form-field query-string building is real, not a stand-in**:
   `js::build_form_query_string` walks named `input`/`textarea`/
   `select` descendants in document order, correctly excludes an

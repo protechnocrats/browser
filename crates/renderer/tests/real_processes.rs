@@ -255,3 +255,56 @@ fn a_sandboxed_renderer_loads_network_pages_through_the_host() {
 fn style_red(scene: &engine::Scene) -> bool {
     scene.items.iter().any(|i| matches!(i, rendering::DisplayItem::Rect { color, .. } if color.r == 255 && color.g == 0 && color.b == 0))
 }
+
+/// Milestone 41 (ADR 025): with real processes, a cross-site navigation
+/// moves the page to another sandboxed renderer — another pid — and the one
+/// it left is ended; a same-origin link keeps its process.
+#[test]
+fn a_cross_site_navigation_moves_the_page_to_another_sandboxed_process() {
+    use std::io::{BufRead, BufReader, Write};
+    let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+    let port = listener.local_addr().unwrap().port();
+    let link = |to: String| format!("<html><body style=\"margin:0\"><a href=\"{to}\" style=\"display:block;height:100px\">go</a></body></html>");
+    let (same, other) = (link(format!("http://127.0.0.1:{port}/same")), link(format!("http://localhost:{port}/other")));
+    std::thread::spawn(move || {
+        for stream in listener.incoming() {
+            let Ok(mut stream) = stream else { continue };
+            let mut reader = BufReader::new(stream.try_clone().unwrap());
+            let mut request = String::new();
+            let _ = reader.read_line(&mut request);
+            loop {
+                let mut line = String::new();
+                if reader.read_line(&mut line).unwrap_or(0) == 0 || line.trim().is_empty() {
+                    break;
+                }
+            }
+            let body = if request.contains("/other") { "<html><body><p>another site</p></body></html>".to_string() } else if request.contains("/same") { other.clone() } else { same.clone() };
+            let _ = write!(stream, "HTTP/1.1 200 OK\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{body}", body.len());
+        }
+    });
+    let mut engine = engine();
+    let page = engine.create_page(PageParams::new(Viewport::new(300.0, 200.0)));
+    let mut now = Instant::now();
+    let committed = |url: String| move |e: &[EngineEvent]| e.iter().any(|e| matches!(e, EngineEvent::NavigationCommitted { url: Some(u), .. } if *u == url));
+    engine.send(page, PageCommand::Load(LoadRequest::Url(format!("http://127.0.0.1:{port}/"))));
+    run_until(&mut engine, &mut now, committed(format!("http://127.0.0.1:{port}/")));
+    let first = engine.renderer_pid(page).unwrap();
+    let click = |engine: &mut Engine| engine.send(page, PageCommand::Input(engine::EngineInput::PointerDown { x: 20.0, y: 20.0 }));
+
+    click(&mut engine);
+    run_until(&mut engine, &mut now, committed(format!("http://127.0.0.1:{port}/same")));
+    assert_eq!(engine.renderer_pid(page), Some(first), "same origin: same process");
+
+    click(&mut engine);
+    run_until(&mut engine, &mut now, committed(format!("http://localhost:{port}/other")));
+    let second = engine.renderer_pid(page).unwrap();
+    assert_ne!(second, first, "another site: another process");
+    wait_gone(first);
+    // The new renderer reports itself sandboxed (once it has started).
+    let deadline = Instant::now() + WAIT;
+    while engine.renderer_sandbox(page).is_none() {
+        assert!(Instant::now() < deadline, "the new renderer never reported");
+        std::thread::sleep(Duration::from_millis(10));
+    }
+    assert!(engine.renderer_sandbox(page).is_some_and(|(on, _)| on || !cfg!(target_os = "linux")), "the new process is sandboxed too");
+}

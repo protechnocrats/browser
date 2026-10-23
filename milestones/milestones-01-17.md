@@ -296,7 +296,8 @@ identity Milestone 13's `createElement` gap is also blocked on — not a
 coincidence; both wait on the same underlying fix.
 **Known limitation:** transform doesn't propagate to descendant boxes
 — a transformed node's own background/border/image/glyphs move, its
-children's independently-computed display items don't.
+children's independently-computed display items don't. *(Closed in
+Milestone 34: a transform applies to the whole subtree.)*
 
 ## 15 — User Input & Interactivity
 **Goal:** click, scroll, type, and focus dispatch as real DOM events.
@@ -341,7 +342,8 @@ no visible feedback it looked broken. Fixed this session:
 `app::apply_focus_outline` paints an outline around the focused
 element's box each frame, reusing Milestone 6/Phase C's existing
 `outline` paint path directly (real CSS `:focus` cascade support is a
-separate, larger, still-open piece of work).
+separate, larger, still-open piece of work — *`:focus` matches since the
+gap pass, 2026-10-21*).
 **Simplified value model, stated plainly:** an input's current text
 lives in its `value` ATTRIBUTE (mutated live), not a separate `.value`
 property the way real DOM distinguishes them.

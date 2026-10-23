@@ -112,7 +112,7 @@ order.
 
 Evaluated, **deferred**. OSS-Fuzz needs a public repository and runs on
 Google's infrastructure with results reported there first; this repository
-has no public remote yet, and making continuous fuzzing depend on one
+had no public remote then (it has a GitHub remote since; whether it is public was not checked), and making continuous fuzzing depend on one
 vendor's service sits badly with §1 (vendor-independent). The nightly
 libFuzzer job (`.github/workflows/fuzz-nightly.yml`) is the self-hosted
 equivalent. Revisit when the repository is public — as an *addition* to the

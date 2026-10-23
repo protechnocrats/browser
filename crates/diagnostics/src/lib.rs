@@ -150,10 +150,15 @@ pub enum Guard {
     /// `engine`: an animating page's frames took more than half its
     /// animation interval; its frame rate was lowered one step (ADR 020).
     FrameBudgetExceeded,
+    /// `engine`: the browser process withheld a response body from a
+    /// renderer — a cross-origin response the request's stated purpose
+    /// cannot use (not an image for an image request, not readable by the
+    /// document's script for a script request; ADR 025 §5).
+    RendererResponseWithheld,
 }
 
 impl Guard {
-    pub const ALL: [Guard; 39] = [
+    pub const ALL: [Guard; 40] = [
         Guard::HtmlNestingDepth,
         Guard::CssNotNestingDepth,
         Guard::CssAtRuleNestingDepth,
@@ -193,6 +198,7 @@ impl Guard {
         Guard::DohFailed,
         Guard::PageUnresponsive,
         Guard::FrameBudgetExceeded,
+        Guard::RendererResponseWithheld,
     ];
 
     /// Stable snake_case identifier — the `guard` field on the event and
@@ -239,6 +245,7 @@ impl Guard {
             Guard::DohFailed => "doh_failed",
             Guard::PageUnresponsive => "page_unresponsive",
             Guard::FrameBudgetExceeded => "frame_budget_exceeded",
+            Guard::RendererResponseWithheld => "renderer_response_withheld",
         }
     }
 }

@@ -284,6 +284,16 @@ write("ipc_decode", "19_grant_as_command", b"\x01\x07\x01")
 # Gap pass (M4's gap): a pointer release, which ends `:active`.
 write("ipc_decode", "20_pointer_up", b"\x01\x02\x04" + struct.pack("<f", 3.0) + struct.pack("<f", 4.0))
 
+# Milestone 41 (ADR 025 §4): `localStorage` served by the browser — a write
+# and a read of one origin's area, the answers, an unknown operation, and a
+# read claiming a value far past any area's quota.
+write("ipc_decode", "21_storage_set", b"\x06" + _st.pack("<Q", 3) + _s("https://news.example") + b"\x01" + _s("greeting") + _s("hello"))
+write("ipc_decode", "22_storage_get", b"\x06" + _st.pack("<Q", 4) + _s("https://news.example") + b"\x00" + _s("greeting"))
+write("ipc_decode", "23_storage_reply_value", b"\x07" + _st.pack("<Q", 4) + b"\x01" + _s("hello"))
+write("ipc_decode", "24_storage_reply_refused", b"\x07" + _st.pack("<Q", 5) + b"\x05")
+write("ipc_decode", "25_storage_unknown_op", b"\x06" + _st.pack("<Q", 6) + _s("https://news.example") + b"\x09")
+write("ipc_decode", "26_storage_huge_value", b"\x07" + _st.pack("<Q", 7) + b"\x01" + _st.pack("<I", 0x7FFFFFFF))
+
 # Milestone 37: a request the browser's filter blocked, answered as such.
 write("ipc_decode", "14_blocked_reply", b"\x04" + _st.pack("<Q", 9) + b"\x01\x03" + _s("trackers (||t.example^)"))
 

@@ -156,7 +156,7 @@ they stopped the rest of that round; it was run again on its own and passed.
 ## Measurements
 
 `frame_bench` (median frame and best frame), interleaved with M39c
-(`89eeeaf`), 24 rounds; load average 4–6 throughout (not from this work):
+(the M39c build), 24 rounds; load average 4–6 throughout (not from this work):
 
 | Page | Frame | M39c median | M40 median | M39c best | M40 best |
 |---|---|---|---|---|---|
@@ -181,9 +181,9 @@ what M40 changed; as with M39b's 2 µs, not attributed.
 
 ## Not done / open
 
-- **Interned names → M40b** (ADR 021 §5, branch `m39-atoms-measured`): in the
+- ~~**Interned names → M40b** (ADR 021 §5): in the
   parser, with selectors matching by atom; measured in M39 as a loss when
-  done after parsing.
+  done after parsing.~~ — done in M40b (ADR 024).
 - **No interrupt for Boa** (ADR 013): `interrupt_handle` is `None`; pages on
   threads are still bounded only by Boa's loop and recursion limits. A
   runtime that can be interrupted plugs in without engine changes.

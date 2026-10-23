@@ -259,6 +259,66 @@ pub(crate) enum ToRenderer {
     /// bit each, which the renderer mints again on its side (ADR 010 §2) —
     /// handles never cross a process boundary.
     Grant(u8),
+    /// Milestone 41: the answer to a [`ToHost::Storage`] request.
+    StorageReply { id: u64, answer: StorageAnswer },
+}
+
+/// Milestone 41 (ADR 025 §4): an operation on one origin's `localStorage`
+/// area, which the browser process keeps and checks.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) enum StorageOp {
+    Get(String),
+    Set(String, String),
+    Remove(String),
+    Clear,
+    Length,
+}
+
+/// What the browser answers a storage operation with.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) enum StorageAnswer {
+    Value(Option<String>),
+    /// A write: `false` if it would exceed the area's quota.
+    Written(bool),
+    Length(u32),
+    Done,
+    /// The renderer may not reach this area (no storage grant, revoked, or
+    /// an origin it never loaded).
+    Refused,
+}
+
+/// The longest storage key or value either side sends: no area holds more.
+const MAX_STORAGE_STRING: usize = storage::MAX_STORAGE_BYTES;
+
+fn encode_storage_op(w: &mut Writer, op: &StorageOp) {
+    match op {
+        StorageOp::Get(name) => {
+            w.u8(0);
+            w.str(name);
+        }
+        StorageOp::Set(name, value) => {
+            w.u8(1);
+            w.str(name);
+            w.str(value);
+        }
+        StorageOp::Remove(name) => {
+            w.u8(2);
+            w.str(name);
+        }
+        StorageOp::Clear => w.u8(3),
+        StorageOp::Length => w.u8(4),
+    }
+}
+
+fn decode_storage_op(r: &mut Reader) -> Result<StorageOp> {
+    Ok(match r.u8()? {
+        0 => StorageOp::Get(r.string(MAX_STORAGE_STRING)?),
+        1 => StorageOp::Set(r.string(MAX_STORAGE_STRING)?, r.string(MAX_STORAGE_STRING)?),
+        2 => StorageOp::Remove(r.string(MAX_STORAGE_STRING)?),
+        3 => StorageOp::Clear,
+        4 => StorageOp::Length,
+        _ => return Err(DecodeError("bad storage operation")),
+    })
 }
 
 /// Catalog entries a setup may carry, and the limits on their strings.
@@ -366,6 +426,27 @@ impl ToRenderer {
                 w.u8(2);
                 w.i64(*t);
             }
+            ToRenderer::StorageReply { id, answer } => {
+                w.u8(7);
+                w.u64(*id);
+                match answer {
+                    StorageAnswer::Value(None) => w.u8(0),
+                    StorageAnswer::Value(Some(v)) => {
+                        w.u8(1);
+                        w.str(v);
+                    }
+                    StorageAnswer::Written(ok) => {
+                        w.u8(2);
+                        w.bool(*ok);
+                    }
+                    StorageAnswer::Length(n) => {
+                        w.u8(3);
+                        w.u32(*n);
+                    }
+                    StorageAnswer::Done => w.u8(4),
+                    StorageAnswer::Refused => w.u8(5),
+                }
+            }
             ToRenderer::Shutdown => w.u8(3),
             ToRenderer::FetchReply { id, result } => {
                 w.u8(4);
@@ -445,6 +526,19 @@ impl ToRenderer {
                     return Err(DecodeError("bad grant"));
                 }
                 ToRenderer::Grant(bits)
+            }
+            7 => {
+                let id = r.u64()?;
+                let answer = match r.u8()? {
+                    0 => StorageAnswer::Value(None),
+                    1 => StorageAnswer::Value(Some(r.string(MAX_STORAGE_STRING)?)),
+                    2 => StorageAnswer::Written(r.bool()?),
+                    3 => StorageAnswer::Length(r.u32()?),
+                    4 => StorageAnswer::Done,
+                    5 => StorageAnswer::Refused,
+                    _ => return Err(DecodeError("bad storage answer")),
+                };
+                ToRenderer::StorageReply { id, answer }
             }
             4 => {
                 let id = r.u64()?;
@@ -639,6 +733,11 @@ pub(crate) enum ToHost {
     Started { sandboxed: bool, detail: String },
     /// Milestone 35: the bytes of a catalog font (by key and face index).
     FontRequest { id: u64, key: String, index: u32 },
+    /// Milestone 41: an operation on the `localStorage` area of `origin` (a
+    /// serialised tuple origin; first-party — no frames exist yet). Checked
+    /// by the host against the page's storage grant and the origins this
+    /// renderer has loaded (ADR 025 §4).
+    Storage { id: u64, origin: String, op: StorageOp },
 }
 
 impl ToHost {
@@ -710,6 +809,12 @@ impl ToHost {
                 w.short_str(key);
                 w.u32(*index);
             }
+            ToHost::Storage { id, origin, op } => {
+                w.u8(6);
+                w.u64(*id);
+                w.str(origin);
+                encode_storage_op(&mut w, op);
+            }
         }
         w.into_bytes()
     }
@@ -771,6 +876,7 @@ impl ToHost {
             }
             4 => ToHost::Started { sandboxed: r.bool()?, detail: r.string(MAX_SHORT_STRING)? },
             5 => ToHost::FontRequest { id: r.u64()?, key: r.string(MAX_FONT_KEY)?, index: r.u32()? },
+            6 => ToHost::Storage { id: r.u64()?, origin: r.string(origin::MAX_URL_BYTES)?, op: decode_storage_op(&mut r)? },
             _ => return Err(DecodeError("unknown message to the host")),
         };
         r.end()?;
@@ -1193,6 +1299,11 @@ mod tests {
                 },
             },
             ToHost::Started { sandboxed: true, detail: "landlock+seccomp".into() },
+            ToHost::Storage { id: 9, origin: "https://a.example".into(), op: StorageOp::Set("k".into(), "v".into()) },
+            ToHost::Storage { id: 10, origin: "https://a.example".into(), op: StorageOp::Get("k".into()) },
+            ToHost::Storage { id: 11, origin: "https://a.example".into(), op: StorageOp::Remove("k".into()) },
+            ToHost::Storage { id: 12, origin: "https://a.example".into(), op: StorageOp::Clear },
+            ToHost::Storage { id: 13, origin: "https://a.example".into(), op: StorageOp::Length },
         ];
         for m in to_host {
             assert_eq!(ToHost::decode(&m.encode()), Ok(m));
@@ -1220,6 +1331,12 @@ mod tests {
             },
             ToRenderer::FetchReply { id: 2, result: Err(NetworkError::Transport("down".into())) },
             ToRenderer::FetchReply { id: 3, result: Err(NetworkError::Blocked("trackers (||t.example^)".into())) },
+            ToRenderer::StorageReply { id: 4, answer: StorageAnswer::Value(Some("v".into())) },
+            ToRenderer::StorageReply { id: 5, answer: StorageAnswer::Value(None) },
+            ToRenderer::StorageReply { id: 6, answer: StorageAnswer::Written(false) },
+            ToRenderer::StorageReply { id: 7, answer: StorageAnswer::Length(3) },
+            ToRenderer::StorageReply { id: 8, answer: StorageAnswer::Done },
+            ToRenderer::StorageReply { id: 9, answer: StorageAnswer::Refused },
         ];
         for m in to_renderer {
             assert_eq!(ToRenderer::decode(&m.encode()), Ok(m));
@@ -1246,6 +1363,13 @@ mod tests {
         assert!(ToRenderer::decode(&seed("18_grant_unknown_bit")).is_err());
         assert!(ToRenderer::decode(&seed("19_grant_as_command")).is_err(), "a grant is never a page command on the wire");
         assert_eq!(ToRenderer::decode(&seed("20_pointer_up")), Ok(ToRenderer::Command(PageCommand::Input(EngineInput::PointerUp { x: 3.0, y: 4.0 }))));
+        // Milestone 41: storage served by the browser.
+        assert_eq!(ToHost::decode(&seed("21_storage_set")), Ok(ToHost::Storage { id: 3, origin: "https://news.example".into(), op: StorageOp::Set("greeting".into(), "hello".into()) }));
+        assert_eq!(ToHost::decode(&seed("22_storage_get")), Ok(ToHost::Storage { id: 4, origin: "https://news.example".into(), op: StorageOp::Get("greeting".into()) }));
+        assert_eq!(ToRenderer::decode(&seed("23_storage_reply_value")), Ok(ToRenderer::StorageReply { id: 4, answer: StorageAnswer::Value(Some("hello".into())) }));
+        assert_eq!(ToRenderer::decode(&seed("24_storage_reply_refused")), Ok(ToRenderer::StorageReply { id: 5, answer: StorageAnswer::Refused }));
+        assert!(ToHost::decode(&seed("25_storage_unknown_op")).is_err());
+        assert!(ToRenderer::decode(&seed("26_storage_huge_value")).is_err(), "longer than any area holds");
     }
 
     /// A page's re-grant leaves its handles on the host's side: the renderer

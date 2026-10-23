@@ -214,12 +214,16 @@ its document's table — interned where they are born, ADR 024.)*
 
 **Current implementation status (kept current, not aspirational-only):**
 the model below is real. **Each page runs in a renderer process of its
-own** by default (`docs/adr/016-renderer-processes.md`): the host starts it
+own** by default (`docs/adr/016-renderer-processes.md`), **which holds
+documents of one site**: a navigation that lands on another site moves the
+page to another renderer, behind the unchanged API (ADR 025, M41). The host starts it
 through a launcher capability it grants the engine (`app` re-launches itself
 with `--renderer`), the renderer sandboxes itself (Linux: Landlock closes the
 filesystem; seccomp refuses sockets, exec and ptrace), and it has no network
 — every request goes to the browser process, which makes it with the
-profile's cookie jar and cache and only for origins the page actually loaded.
+profile's cookie jar and cache, only for origins of that site the page
+actually loaded, and only within the page's network grant; it keeps the
+page's `localStorage` too.
 The engine API is unchanged: in process mode the page's mailbox is bridged
 over a bounded, fuzzed binary protocol on the renderer's stdin/stdout, and a
 renderer that aborts or is killed becomes `PageCrashed`. A watchdog thread per
@@ -256,8 +260,7 @@ as they arrive (performance-audit fixes). The pipeline is observable (§9, Miles
 27) and sits behind one `engine` crate (Milestone 29, ADR 005). Still
 single-threaded *within* a page: layout positioning (genuine sequential
 dependencies — see `layout::layout_document`), display-list building, and
-script. Still open: a process per *site* rather than per page, storage served
-by the browser process, sandboxes beyond Linux (M41), a GPU process, and a
+script. Still open: sandboxes beyond Linux, a GPU process, and a
 separate decode/raster pool — this paragraph exists so "thread-safe" and
 "zero-trust" stay measured claims, and is updated whenever the model
 changes.
@@ -286,8 +289,9 @@ changes.
 **Isolation roadmap:** OS-process isolation per page is done (ADR 016) —
 the upgrade the thread model was built not to foreclose, made when an
 audit found memory corruption reachable from page content inside a
-dependency (Boa; ADR 015). Next: a process per site, so a cross-site
-navigation changes process (M41), then a separate GPU process. Each costs
+dependency (Boa; ADR 015) — and per site (ADR 025, M41): a cross-site
+navigation changes process. Next: sandboxes on macOS and Windows, then a
+separate GPU process. Each costs
 memory and IPC; the renderer protocol sends only what changed (glyph-atlas
 bands, images once) to keep it small.
 

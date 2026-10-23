@@ -140,7 +140,8 @@ silently dropped:
   of: tracking a selection ANCHOR/FOCUS as (element, character-offset)
   pairs that can span multiple text runs and even multiple elements,
   turning `MouseMoved` from "not used yet" (see its own doc comment in
-  `shell_desktop`) into real drag-tracking state, and a new rendering
+  `shell_desktop`; *since the gap pass pointer moves are hit-tested for
+  `:hover`, but nothing tracks a drag*) into real drag-tracking state, and a new rendering
   pass drawing a highlight rectangle per covered word-box (potentially
   across several lines). Every existing caret/cursor mechanism in this
   codebase (Milestones 16/19/this milestone's `contenteditable` work)

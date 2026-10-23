@@ -5,7 +5,7 @@ the rules every milestone is held to. The principles it serves are in
 `browser-engine-architecture.md` §1: memory-safe, GPU-first, thread-safe,
 capability-based, zero-trust, privacy-first, vendor-independent.
 
-- **Where things stand:** Milestones 1–40b are done (38 as 38a and 38b), as are a principles
+- **Where things stand:** Milestones 1–41 are done (38 as 38a and 38b), as are a principles
   hardening pass (between M27 and M28), the principles-audit fixes, the
   performance-audit fixes and process isolation (every page in a sandboxed
   renderer process, ADR 016). M34 put clips, transforms and opacity groups on
@@ -27,15 +27,18 @@ capability-based, zero-trust, privacy-first, vendor-independent.
   generated from WebIDL, one wrapper per node and every GC handle traced
   (ADR 023). M40b interned tag and attribute names where they are born,
   with a table per document, and made selectors match by atom (ADR 024).
-  The suite has 1,164 tests with 0 failures, clippy is at 28
+  M41 made a renderer hold one site's documents — a page moves to another
+  renderer when a navigation lands on another site — and moved
+  `localStorage` and the enforcement of the network grant into the browser
+  process (ADR 025); sandboxes beyond Linux were not built.
+  The suite has 1,209 tests with 0 failures, clippy is at 28
   (a ratchet), there are 25 fuzz targets, and CI runs the script and page
   suites under AddressSanitizer.
   `AUDIT.md` has the verified detail and every open gap.
-- **Next:** M41 (site isolation), the rest of what the architecture
-  review (§3) calls for. M40b closed A2's last item, interned names. M40 closed A3 and A4: `script::ScriptRuntime` with Boa and a stub
-  runtime behind it, bindings generated from `crates/script/webidl/`.
-- **After M41:** the unscheduled backlog in §4, ordered by what the
-  real-site corpus measures.
+- **Next:** the unscheduled backlog in §4, ordered by what the real-site
+  corpus measures. M41 closed what remained of the architecture review's A1
+  but the non-Linux sandboxes (§4, process isolation); M40b closed A2's last
+  item, interned names; M40 closed A3 and A4.
 
 Every milestone has its own file under `milestones/`. That file covers what
 was built, its acceptance criteria and what is still open. M1–M17 and Phases
@@ -57,7 +60,7 @@ A–F share one file, `milestones/milestones-01-17.md`.
 | 23 | [Rich input & editing](milestones/milestone-23-rich-input-and-editing.md) | ✅ with gap | `contenteditable` and touch tap. Selection and drag-and-drop are in the backlog. |
 | 24 | [Accessibility tree](milestones/milestone-24-accessibility-tree.md) | ✅ with gap | Role, name and state computed from the DOM. The OS screen-reader bridge is in the backlog. |
 | — | [Principles hardening pass](milestones/hardening-pass-principles-audit.md) | ✅ | File access is a denied-by-default capability, plus the PSL, cookie rules, request hygiene, partitioned storage and cache, and linear-time `pattern`. |
-| 25 | [Guardrails & CI](milestones/milestone-25-guardrails-and-ci-hardening.md) | ✅ with gap | `forbid(unsafe_code)` everywhere, a fuzz suite, a clippy ratchet, `cargo audit` and `cargo deny`. The CI and libFuzzer jobs have never run. |
+| 25 | [Guardrails & CI](milestones/milestone-25-guardrails-and-ci-hardening.md) | ✅ with gap | `forbid(unsafe_code)` everywhere, a fuzz suite, a clippy ratchet, `cargo audit` and `cargo deny`. No run of the CI or libFuzzer jobs has been observed. |
 | 26 | [Shared network context](milestones/milestone-26-shared-network-context.md) | ✅ | One cookie jar, cache and route per profile, and hop-by-hop redirects. |
 | 27 | [Observability](milestones/milestone-27-observability-baseline.md) | ✅ | A `tracing` facade, 14 security guards, metrics and `app --trace`. |
 | 28 | [Origin & site model](milestones/milestone-28-origin-and-site-model.md) | ✅ | An `origin` crate with `Origin`, `Site`, `StorageKey` and one CORS rule. |
@@ -70,7 +73,7 @@ A–F share one file, `milestones/milestones-01-17.md`.
 | — | [Process isolation](milestones/process-isolation.md) | ✅ | Every page in its own renderer process (Landlock + seccomp on Linux), behind the unchanged engine API; the network, cookies and cache stay in the browser process, which checks each request's origin. |
 | 34 | [Compositing & GPU depth](milestones/milestone-34-compositing.md) | ✅ with gap | Clip, transform and group markers in the display list (ADR 017); `rotate()`/`skew()`, rounded clips and group opacity drawn; transform animations and container scrolls as compositor updates; a back buffer redrawn by damage; image atlas pages with LRU eviction; 211 → 3 draw calls on an image-heavy page; glyph-atlas compaction. A5 → M39b. |
 | 35 | [Text subsystem](milestones/milestone-35-text-subsystem.md) | ✅ with gap | `ttf-parser` + `rustybuzz` + our rasterizer (ADR 009; `fontdue` and its hang gone); font fallback from host-granted fonts (served to renderers over IPC); `font-*`, `line-height`, `text-decoration`, `text-transform`, `direction`; UAX #9 bidi and UAX #14 line breaking; web fonts with CORS and bounded decoding. Script snapshots await a person's sign-off. |
-| 36 | [Capabilities & Browser Core](milestones/milestone-36-capabilities-and-browser-core.md) | ✅ with gap | Authority as handles (ADR 010): `capability` and `storage` crates; script gets `fetch`/XHR/`localStorage` only through grants the profile mints per page, scoped to the document's storage key and revocable; unbuilt APIs' capabilities cannot be constructed; `browser_core` with `Profile`, `Session` (tabs, zoom), validated `Settings` and a `PermissionStore`, persisted; `check-capabilities.sh`. Process-mode storage and network enforcement → M41. |
+| 36 | [Capabilities & Browser Core](milestones/milestone-36-capabilities-and-browser-core.md) | ✅ with gap | Authority as handles (ADR 010): `capability` and `storage` crates; script gets `fetch`/XHR/`localStorage` only through grants the profile mints per page, scoped to the document's storage key and revocable; unbuilt APIs' capabilities cannot be constructed; `browser_core` with `Profile`, `Session` (tabs, zoom), validated `Settings` and a `PermissionStore`, persisted; `check-capabilities.sh`. Process-mode storage and network enforcement → M41 (done there). |
 | 37 | [Privacy layer](milestones/milestone-37-privacy-layer.md) | ✅ with gap | Route policy with proxy (HTTP/SOCKS) and system-VPN routes that fail closed (ADR 011); DNS over HTTPS with no default resolver (ADR 012); extra CA roots beside the bundled ones (ADR 018); a filter engine on every hop, third-party cookies blocked, storage keyed by top-level site, and a fingerprint policy for `Date`, rAF and fonts (ADR 019). WireGuard evaluated, not built. |
 | 38a | [Script time bound & Boa upgrade](milestones/milestone-38a-script-bound-and-boa.md) | ✅ with gap | A renderer that owes a tick for 10 s with no progress is killed and its page reported crashed (ADR 013); Boa 0.17 → 0.22, ported, without its default features; both advisory exceptions removed. Thread mode is bounded only by Boa's limits. |
 | 38b | [Frame and power budget](milestones/milestone-38b-frame-and-power-budget.md) | ✅ with gap | Pages woken by finished work instead of 8 ms polling; hidden pages (background tabs) do no animation work; a frame rate that steps down under load and back, input never degraded (ADR 020). Off-screen transitions are not skipped. |
@@ -78,6 +81,7 @@ A–F share one file, `milestones/milestones-01-17.md`.
 | 39b | [Layout coordinates & partial display lists](milestones/milestone-39b-layout-coordinates.md) | ✅ with gap | Box frames: a reused subtree moves in O(1), its bookkeeping kept across frames (A5); subtree bounds and binary search — a click examines 5 boxes on 10k rows, not 12,001; a page's display list updated in part after a layout change (≤ 12 boxes built of 40,000); node-id hashing for the style cache and reuse maps; a sticky-positioning bug fixed (ADR 022). A real one-element change on 10k rows: 25 → 7 ms. |
 | 39c | [Changes that keep their size, patched in place](milestones/milestone-39c-patch-in-place.md) | ✅ | A change whose element keeps its size is laid out alone and spliced into the previous layout and display list (ADR 022 §8–10); intrinsic sizes measured at the change; the reuse flag became a frame stamp. A one-element change on 10k rows: 7 ms → 0.33 ms (23 ms in M39). |
 | 40 | [Script runtime interface & generated bindings](milestones/milestone-40-script-runtime-and-bindings.md) | ✅ with gap | `script::ScriptRuntime` (ADR 023): Boa (`js`) and a stub runtime behind it, the host side — DOM operations, events, forms, editing, `fetch`/XHR, storage — runtime-independent; bindings generated from WebIDL through a checked `dispatch`; one wrapper per node, held weakly, its node in an internal slot; GC handles traced (`gc-handle-captures.txt` empty). 17 binding cases pass on both runtimes. Interned names → M40b; Boa has no interrupt. |
+| 41 | [Site isolation & browser-process storage](milestones/milestone-41-site-isolation.md) | ✅ with gap | A renderer holds one site's documents (ADR 025): a navigation that lands on another site — link, typed URL, redirect — moves the page to a renderer that has held nothing, handed the response, behind the unchanged API; `localStorage` served by the browser through the page's grant, shared by pages of one origin; the network grant enforced by the browser, which withholds what a mislabelled request cannot use. No sandbox on macOS or Windows yet. |
 | 40b | [Interned names](milestones/milestone-40b-interned-names.md) | ✅ | A `names` crate (ADR 024): well-known atoms equal everywhere, a `Name` that is an atom or its own text, a table per document; born interned in the tokenizer, `createElement` and the CSS parser, interned in place in the document; readers and selectors compare atoms, the rule index keys well-known types by atom. Corpus parse 7–10% faster, 10k first frames 7–8%, DOM changes 10%, a selector-heavy restyle 3–6%. |
 | — | [Performance-audit fixes](milestones/performance-audit-fixes.md) | ✅ | Linear selector matching (was exponential: 11 s for one element); scroll and caret frames drawn from a per-layout display list (4.3 ms → 0.03 ms on 10k rows); incremental intrinsic sizing; a bounded fetch pool; progressive images; a heap use-after-free in Boa's teardown fixed (P12, ADR 015). |
 
@@ -125,7 +129,7 @@ A milestone is not done until all of these hold:
 
 ---
 
-## 3. Milestones 34–41 (34–40b done; M41 next)
+## 3. Milestones 34–41 (done)
 
 ```
 M34 Compositing & GPU depth ──┐
@@ -139,7 +143,7 @@ M39 Arena DOM ──► M39b Layout coordinates & partial display lists ──�
 |---|---|---|---|---|---|
 | 34 | Compositing & GPU depth | L | Medium | M31, M33 | ✅ Done (A5 → M39, then M39b: done) |
 | 35 | Text subsystem | XL | Medium | M32 fuzz targets. A shaping/font parser that survives the `fontdue` hang input. | ✅ Done (ADR 009) |
-| 36 | Capability layer & Browser Core seed | L | Medium | M28, M30 | ✅ Done (ADR 010; process-mode storage and network enforcement → M41) |
+| 36 | Capability layer & Browser Core seed | L | Medium | M28, M30 | ✅ Done (ADR 010; process-mode storage and network enforcement → M41: done) |
 | 37 | Privacy layer | XL | Medium | M28, M36 | ✅ Done (ADR 011, 012, 018, 019; WireGuard → backlog) |
 | 38a | Script time bound & Boa upgrade | M | Medium | Process isolation | ✅ Done (ADR 013; thread mode bounded only by Boa's limits) |
 | 38b | Frame and power budget | M | Low | M27, M31, M34 | ✅ Done (ADR 020; off-screen transitions → backlog) |
@@ -148,7 +152,7 @@ M39 Arena DOM ──► M39b Layout coordinates & partial display lists ──�
 | 39c | Changes that keep their size, patched in place | M | Medium | M39b | ✅ Done (ADR 022 §8–10) |
 | 40 | Script runtime interface & generated bindings | XL | High | M38a (Boa upgrade), M39 | ✅ Done (ADR 023; interned names → M40b) |
 | 40b | Interned names | M | Medium (measured a loss once) | M39, M40 | ✅ Done (ADR 024) |
-| 41 | Site isolation & browser-process storage | L | Medium | Process isolation (done), M36 | **Next** — architecture review A1's remainder |
+| 41 | Site isolation & browser-process storage | L | Medium | Process isolation (done), M36 | ✅ Done with gap (ADR 025; non-Linux sandboxes → §4) |
 
 Effort key: S is under a session, M is one session, L is 2–3 sessions and XL
 is 4 or more.
@@ -202,7 +206,7 @@ incremental-versus-fresh oracles). What will not:
 
 | # | Finding | Why it matters over decades | Where it goes |
 |---|---|---|---|
-| A1 | No process isolation: every page in the browser's process. | Memory safety ended at our own code (P12 was in Boa), so one corrupting page owned the browser; zero-trust checks shared its address space. | ✅ Done: [process isolation](milestones/process-isolation.md), ADR 016. Remaining — site-per-process navigation, storage in the browser process, sandboxes beyond Linux — M41. |
+| A1 | No process isolation: every page in the browser's process. | Memory safety ended at our own code (P12 was in Boa), so one corrupting page owned the browser; zero-trust checks shared its address space. | ✅ Done: [process isolation](milestones/process-isolation.md), ADR 016; site isolation and storage in the browser process, [M41](milestones/milestone-41-site-isolation.md), ADR 025. Remaining — sandboxes beyond Linux — §4. |
 | A2 | The DOM is an owned tree of `Element`s: string tags, attributes in a `Vec`, no parent pointers, positions found through side indexes, text nodes not first-class, no `insertBefore`. | Every crate is written against it, so each milestone built on it raises the cost of replacing it. Mature engines use an arena of nodes addressed by id, with interned names. | ✅ Done in M39 (ADR 021); interned names in M40b (ADR 024) |
 | A3 | Script bindings: elements named by `id` string, a new wrapper per `getElementById`, GC handles held outside Boa's heap (ADR 015), validity and editability logic copied between `js`, `style` and `accessibility`. | This does not stretch to the thousands of DOM APIs real sites use; engines that got there generate bindings from WebIDL. | ✅ Done in M40 (ADR 023): bindings generated from `crates/script/webidl/`, one wrapper per `NodeId`, handles traced, one rule each in `dom` (M39) |
 | A4 | The JS engine is not behind an interface: Boa's types run through `js` (0.22 since M38a). | The architecture doc calls JS "a replaceable subsystem behind a runtime interface", but no such interface exists; Boa cannot be interrupted (its advisories were cleared by the M38a upgrade). | ✅ Done in M40 (ADR 023): `script::ScriptRuntime`, with Boa and a stub behind it; Boa still offers no interrupt |
@@ -354,7 +358,7 @@ emoji and IME.
 > Done with gaps (2026-10-11):
 > `milestones/milestone-36-capabilities-and-browser-core.md`, ADR 010.
 > Storage persists in thread mode only, and the network capability is
-> enforced inside the renderer in process mode — both → M41. The scope is
+> enforced inside the renderer in process mode — both → M41 (done there). The scope is
 > kept as planned, for the record.
 
 **Goal:** make capability-based real. Authority is granted, scoped and
@@ -712,7 +716,11 @@ is (architecture review A3, A4).
       document's table, freed with it (counted).
 - [x] The restyle and layout oracles and the corpus goldens pass unchanged.
 
-### Milestone 41 — Site isolation & browser-process storage
+### Milestone 41 — Site isolation & browser-process storage — done
+
+> Done with gaps (2026-10-22): `milestones/milestone-41-site-isolation.md`,
+> ADR 025. Sandboxes beyond Linux were not built (they need FFI and those
+> machines) → §4. One spare serves every site (a spare has held nothing).
 
 **Goal:** finish what process isolation (ADR 016) started (architecture
 review A1).
@@ -731,18 +739,19 @@ review A1).
   mislabel as its document loader's.
 
 **Acceptance criteria**
-- [ ] A cross-site link lands in a different process; same-site does not.
-- [ ] A renderer whose page has no network grant cannot get a script-style
+- [x] A cross-site link lands in a different process; same-site does not.
+- [x] A renderer whose page has no network grant cannot get a script-style
       request (credentialed cross-origin) made by the browser.
-- [ ] Two pages of one origin share `localStorage` in process mode.
-- [ ] The sandbox self-test passes on each supported platform.
+- [x] Two pages of one origin share `localStorage` in process mode.
+- [~] The sandbox self-test passes on each supported platform. *(Linux;
+      macOS and Windows have no sandbox yet.)*
 
 ## 4. Backlog — not yet scheduled
 
 Ordered by how many of the 56 corpus pages use each feature, as measured
 after M33 by `cargo run -p conformance --release -- run`. The report ranks
-unsupported features. After M41 — or earlier, if a gap blocks real pages — the
-top of this list becomes the next milestone.
+unsupported features. The top of this list becomes the next milestone, unless
+a gap blocks real pages first.
 
 | Pages | Gap | Area |
 |---|---|---|
@@ -856,8 +865,13 @@ that deferred each item is in brackets, and its file has the reasoning.
   - explicit ARIA roles and states [M24].
 - **Style internals:** CSS property parsing and application generated from
   one property table rather than matched by string [architecture review A6].
-- **Process isolation** (the parts M41 does not cover): a GPU process; a
-  network process separate from the browser process [ADR 016].
+- **Process isolation** (the parts M41 does not cover): sandboxes beyond
+  Linux — macOS `sandbox_init`/App Sandbox, Windows AppContainer — which
+  need FFI (an entry in `scripts/unsafe-exceptions.txt`) and a machine of
+  each platform to build and self-test on [M41]; a GPU process; a network
+  process separate from the browser process [ADR 016]; a `localStorage`
+  cache in the renderer, if a page is measured to suffer from a round trip
+  per operation [M41].
 - **Performance:**
   - A change that alters its element's size still has its parent visit all
     its children (each moved over in O(1)), and the page's display list
@@ -940,6 +954,7 @@ In `docs/adr/`. Each is written before the code it constrains.
 | 022 | Layout coordinates: box frames, subtree bounds, partial display lists, patches in place | Written (M39b; §8–10 M39c) |
 | 023 | The script runtime interface; bindings generated from WebIDL; one wrapper per node; traced GC handles | Written (M40) |
 | 024 | Interned names: the `names` crate, born interned, a table per document, interned in place, selectors by atom | Written (M40b) |
+| 025 | Site isolation: a renderer per site, pages moved on a response of another site, storage and the network grant enforced by the browser | Written (M41) |
 
 ---
 
@@ -972,15 +987,15 @@ In `docs/adr/`. Each is written before the code it constrains.
 | M39b's relative positions are summed in floating point, so absolute positions can differ in the last digits and move goldens. | Avoided by design (ADR 022: fresh layouts keep exact positions; only reused subtrees carry offsets). One golden moved, for a sticky-positioning bug fix, explained per pixel. |
 | The renderer protocol drifts from the engine API (a field added to one and not the other). | The codec round-trip test covers every message; the scene-equality test compares thread and process mode frame by frame. |
 
-## 8. Target scorecard (after M41)
+## 8. Target scorecard
 
 | Principle | Today | Target |
 |---|---|---|
 | Memory-safe | Met: no `unsafe` in our code, enforced in CI; dependencies exercised under AddressSanitizer in CI; GC handles traced, not released by hand (M40, ADR 023) | Unchanged |
 | GPU-first | Met: GPU clips and transforms, opacity groups, compositor updates for transform animations and container scrolls, damage-based presentation, bounded GPU memory (M34); display lists updated in part after a layout change (M39b) | A page with a sticky box drawn without building its list every frame |
 | Thread-safe | Met: page threads, GPU thread, `Send` boundary, contained panics | Unchanged |
-| Capability-based | Mostly: script's network and storage are granted, scoped, revocable handles (M36); file access and process launching are host grants; all checked by script | No ambient authority reachable from scripts; the browser process enforces script grants (M41) |
-| Zero-trust | Mostly: every parser and the renderer protocol fuzzed and capped, GPU resources bounded, pages in sandboxed processes whose requests the browser checks; CI never run | Every parser fuzzed in a running CI; process per site (M41) |
+| Capability-based | Met: script's network and storage are granted, scoped, revocable handles (M36); file access and process launching are host grants; the browser process enforces script grants and serves storage (M41) | Unchanged |
+| Zero-trust | Mostly: every parser and the renderer protocol fuzzed and capped, GPU resources bounded, pages in sandboxed processes of one site each, whose requests and storage the browser checks (M41); no CI run observed | Every parser fuzzed in a running CI; sandboxes beyond Linux |
 | Privacy-first | Met: a named, tested policy for every §6 row (M37) | Unchanged; WireGuard and system trust stores beyond Linux |
 | Vendor-independent | Met: `cargo deny` bans | Unchanged |
 | Observability | Partly: tracing and counters | Plus `about:engine` and deterministic replay (backlog, split out of M38) |

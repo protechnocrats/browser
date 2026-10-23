@@ -16,27 +16,27 @@ corpus that ranked the work and checks every step).
 user-agent stylesheet as a cascade origin, derived ids for generated content,
 boxed rare property groups, float containment, the layout stack contract.
 
-## What was built (one commit per step)
+## What was built (one step at a time)
 
-| Step | Commit | What |
-|---|---|---|
-| 1 | `9331164` | **Lengths:** `Length` is `px + percent`; every unit (`em`, `rem`, `ex`, `ch`, `vw`, `vh`, `vmin`, `vmax`, `in`, `cm`, `mm`, `q`, `pt`, `pc`, `%`), `calc()` (exact: linear in px and %), `min()`/`max()`/`clamp()`. `font-size` inherits, applies first, relative to the parent; the root defines `rem`. `auto` margins centre. Viewport height reaches the cascade. |
-| 2 | `303435c` | **Colours:** `rgb()`/`rgba()`/`hsl()`/`hsla()` (both syntaxes), 3/4/6/8-digit hex, the 148 named colours, `transparent`, `currentcolor`. |
-| 3 | `678a639` | **`<html>` is the document**; **user-agent stylesheet** (cascade origin below author rules); `:root`; sibling margin collapsing; canvas colour from root/body; `conformance render FILE OUT.png`. |
-| 4 | `d172f5d` | **`display`:** `none`, `inline`, `inline-block`, `inline-flex`; per-tag defaults in the cascade; atomic inline boxes (shrink-to-fit, baseline-aligned); replaced-element sizes, `width`/`height` attributes, aspect ratio; form-control default sizes. |
-| 5 | `6ad9d00` | **`min-`/`max-width`/`-height`**; flex rewritten on CSS Flexbox §9.7 (freezing, automatic minimum, margins, `auto` margins, items laid out at their flexed width). |
-| 6 | `fc6f38f` | **Backgrounds:** the `background` shorthand, `background-repeat`, pixel/edge-offset positions, percentage sizes; images carry UVs (tiling in one item; every image clipped to its box). WGSL shaders validated in `cargo test`. |
-| 7 | `ebfa8c2` | **Positioning:** `relative`, `absolute`, `fixed`, `sticky`, `z-index`, paint order and scroll-aware hit testing. **CSS Nesting.** |
-| 8 | `322317f` | **`overflow`:** clipping (rects, images, glyphs); scroll containers with their own offsets; the wheel scrolls the container under the pointer. |
-| 9 | `1946edc` | **`opacity`, `visibility`.** |
-| 10 | `bdbd580` | **`box-shadow`** (outer; GPU feathered-SDF quad, CPU raster). |
-| 11 | `0259952` | **`::before`/`::after`** (and `:before`/`:after`), `content` strings/escapes/`attr()`. |
-| 12 | `f619701` | **Flex column grow/shrink** (closes Milestone 10's scope cut). |
-| 13 | `9f87366` | **Floats and `clear`**, line boxes around floats, formatting-context roots beside them. |
-| 14 | `063a8d4` | **Tables:** automatic layout, `colspan`/`rowspan`, row/group boxes, `border-spacing`/`-collapse`, legacy attributes (`cellpadding`, `cellspacing`, `border`, `bgcolor`, `align`, `valign`, `width`, `height`). |
-| 15 | `32ef1cb` | **CSS Grid:** track lists (`fr`, `minmax()`, `repeat()` incl. `auto-fill`/`auto-fit`), template areas, line/span/area placement, auto-placement, gaps. **Layout stack contract.** |
-| — | `967ae51`, `8e0abf3` | Stack-overflow fix (see below). |
-| — | `dc3730e` | Performance: measured against pre-M33 and won back most of the cost (see below). |
+| Step | What |
+|---|---|
+| 1 | **Lengths:** `Length` is `px + percent`; every unit (`em`, `rem`, `ex`, `ch`, `vw`, `vh`, `vmin`, `vmax`, `in`, `cm`, `mm`, `q`, `pt`, `pc`, `%`), `calc()` (exact: linear in px and %), `min()`/`max()`/`clamp()`. `font-size` inherits, applies first, relative to the parent; the root defines `rem`. `auto` margins centre. Viewport height reaches the cascade. |
+| 2 | **Colours:** `rgb()`/`rgba()`/`hsl()`/`hsla()` (both syntaxes), 3/4/6/8-digit hex, the 148 named colours, `transparent`, `currentcolor`. |
+| 3 | **`<html>` is the document**; **user-agent stylesheet** (cascade origin below author rules); `:root`; sibling margin collapsing; canvas colour from root/body; `conformance render FILE OUT.png`. |
+| 4 | **`display`:** `none`, `inline`, `inline-block`, `inline-flex`; per-tag defaults in the cascade; atomic inline boxes (shrink-to-fit, baseline-aligned); replaced-element sizes, `width`/`height` attributes, aspect ratio; form-control default sizes. |
+| 5 | **`min-`/`max-width`/`-height`**; flex rewritten on CSS Flexbox §9.7 (freezing, automatic minimum, margins, `auto` margins, items laid out at their flexed width). |
+| 6 | **Backgrounds:** the `background` shorthand, `background-repeat`, pixel/edge-offset positions, percentage sizes; images carry UVs (tiling in one item; every image clipped to its box). WGSL shaders validated in `cargo test`. |
+| 7 | **Positioning:** `relative`, `absolute`, `fixed`, `sticky`, `z-index`, paint order and scroll-aware hit testing. **CSS Nesting.** |
+| 8 | **`overflow`:** clipping (rects, images, glyphs); scroll containers with their own offsets; the wheel scrolls the container under the pointer. |
+| 9 | **`opacity`, `visibility`.** |
+| 10 | **`box-shadow`** (outer; GPU feathered-SDF quad, CPU raster). |
+| 11 | **`::before`/`::after`** (and `:before`/`:after`), `content` strings/escapes/`attr()`. |
+| 12 | **Flex column grow/shrink** (closes Milestone 10's scope cut). |
+| 13 | **Floats and `clear`**, line boxes around floats, formatting-context roots beside them. |
+| 14 | **Tables:** automatic layout, `colspan`/`rowspan`, row/group boxes, `border-spacing`/`-collapse`, legacy attributes (`cellpadding`, `cellspacing`, `border`, `bgcolor`, `align`, `valign`, `width`, `height`). |
+| 15 | **CSS Grid:** track lists (`fr`, `minmax()`, `repeat()` incl. `auto-fill`/`auto-fit`), template areas, line/span/area placement, auto-placement, gaps. **Layout stack contract.** |
+| — | Stack-overflow fix (see below). |
+| — | Performance: measured against pre-M33 and won back most of the cost (see below). |
 
 New fuzz targets: `css_length`, `css_color`, `css_background`, `css_grid`
 (19 in total), plus structural stress inputs for nested `calc()`, CSS
@@ -70,8 +70,8 @@ documented contract (`layout::MIN_STACK_BYTES`, ADR 014) with a guard test.
 
 ## Performance
 
-Measured on the same machine against the pre-M33 commit (`f2c7fb2`, built in
-a separate worktree), interleaved runs, 10,000-row page
+Measured on the same machine against the code before M33 (built in a separate
+worktree), interleaved runs, 10,000-row page
 (`cargo run -p engine --release --example frame_bench` /
 `--example frame_profile`):
 

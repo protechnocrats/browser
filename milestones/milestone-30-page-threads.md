@@ -8,7 +8,7 @@ while there is still one page to migrate: each page on its own thread,
 a GPU thread, message passing only, contained panics.
 
 **Builds on:** Milestone 29 (the message-shaped engine API), Milestone 27
-(tracing). Decision records, written and committed (`4d82dd9`) before any
+(tracing). Decision records, written and committed before any
 migration code: `docs/adr/006-page-thread-actor-model.md`,
 `docs/adr/007-panic-containment.md`.
 
