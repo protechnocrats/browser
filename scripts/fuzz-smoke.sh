@@ -40,7 +40,7 @@ echo "fuzz-smoke: ${#targets[@]} targets, ${SECS}s each: ${targets[*]}"
 failed=()
 for t in "${targets[@]}"; do
     echo "::group::fuzz $t (${SECS}s)"
-    if cargo +nightly fuzz run --target "$TARGET" "$t" --"${LIBFUZZER_ARGS[@]}"; then
+    if cargo +nightly fuzz run --target "$TARGET" "$t" -- "${LIBFUZZER_ARGS[@]}"; then
         echo "OK: $t"
     else
         echo "FAIL: $t crashed, hung, or exceeded the memory limit (see fuzz/artifacts/$t/)"
