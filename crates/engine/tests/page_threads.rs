@@ -169,7 +169,13 @@ fn the_waker_fires_when_a_page_publishes() {
     let page = new_page(&mut engine);
     engine.send(page, html("<html><body><p>hi</p></body></html>"));
     engine.update_blocking(Instant::now(), WAIT);
-    assert!(wakes.load(Ordering::SeqCst) >= 1);
+    // The page thread wakes the host just AFTER publishing (so a woken host
+    // always finds the frame), and update_blocking returns on the publish.
+    let deadline = Instant::now() + WAIT;
+    while wakes.load(Ordering::SeqCst) == 0 {
+        assert!(Instant::now() < deadline, "the waker never fired");
+        std::thread::sleep(Duration::from_millis(1));
+    }
     assert_eq!(engine.next_wake(), None, "with a waker installed, an idle engine needs no polling");
 }
 
