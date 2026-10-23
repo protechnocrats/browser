@@ -25,6 +25,10 @@ SECS="${1:-60}"
 # slow. timeout: any single input taking >10 s is a hang bug.
 # rss_limit_mb: an allocation blow-up must FAIL the run, not OOM the runner.
 LIBFUZZER_ARGS=(-max_total_time="$SECS" -max_len=65536 -timeout=10 -rss_limit_mb=2048)
+# cargo-fuzz defaults --target to the triple IT was built for; prebuilt
+# binaries (taiki-e/install-action) are static musl, and ASan can't link
+# against static libc. Pin the build to the nightly toolchain's host.
+TARGET="$(rustc +nightly -vV | sed -n 's/^host: //p')"
 
 mapfile -t targets < <(cargo +nightly fuzz list 2>/dev/null)
 if [ "${#targets[@]}" -eq 0 ]; then
@@ -36,7 +40,7 @@ echo "fuzz-smoke: ${#targets[@]} targets, ${SECS}s each: ${targets[*]}"
 failed=()
 for t in "${targets[@]}"; do
     echo "::group::fuzz $t (${SECS}s)"
-    if cargo +nightly fuzz run "$t" -- "${LIBFUZZER_ARGS[@]}"; then
+    if cargo +nightly fuzz run --target "$TARGET" "$t" --"${LIBFUZZER_ARGS[@]}"; then
         echo "OK: $t"
     else
         echo "FAIL: $t crashed, hung, or exceeded the memory limit (see fuzz/artifacts/$t/)"
