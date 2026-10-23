@@ -106,7 +106,7 @@ plain release run.
 ## Measurements
 
 `frame_bench` (median frame), three interleaved rounds against M38a
-(`c8756d7`), same machine:
+(the M38a build), same machine:
 
 | Page | Frame | M38a | M38b |
 |---|---|---|---|

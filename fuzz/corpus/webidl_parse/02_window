@@ -5,7 +5,12 @@
 callback FrameRequestCallback = undefined (double time);
 
 [Global]
-interface Window {
+interface Window : EventTarget {
+  // The global object itself (gap pass, 2026-10-21): `window.x`, `self.x`.
+  // Its `addEventListener` registers listeners; the engine fires no
+  // window events yet (`load`, `resize`: backlog).
+  readonly attribute Window window;
+  readonly attribute Window self;
   readonly attribute Document document;
   readonly attribute Storage localStorage;
   readonly attribute Storage sessionStorage;

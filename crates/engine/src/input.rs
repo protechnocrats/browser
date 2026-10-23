@@ -48,8 +48,10 @@ pub(crate) fn land_navigation(page: &Page, id: PageId, events: &mut Vec<EngineEv
     let Some(result) = result else { return false };
     let url = page.pending_nav.borrow_mut().take().map(|(url, _)| url).unwrap_or_default();
     match result {
-        Ok((root, sheet, cache, pending)) => match page.replace_with_navigation(root, sheet, cache, pending, Some(url.clone())) {
-            Ok(()) => events.push(EngineEvent::NavigationCommitted { page: id, url: Some(url) }),
+        // The document is at the URL it landed on (after any redirects): that
+        // names its origin and resolves its relative links.
+        Ok((root, sheet, cache, pending, landed)) => match page.replace_with_navigation(root, sheet, cache, pending, Some(landed.clone())) {
+            Ok(()) => events.push(EngineEvent::NavigationCommitted { page: id, url: Some(landed) }),
             Err(()) => events.push(EngineEvent::NavigationFailed { page: id, url, error: "the document has no <body> element".to_string() }),
         },
         Err(error) => events.push(EngineEvent::NavigationFailed { page: id, url, error }),

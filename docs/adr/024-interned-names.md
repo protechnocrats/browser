@@ -14,8 +14,7 @@
 
 ADR 021 §5 designed interned names — a fixed table of well-known names
 equal in every document, a per-document table for the rest, integer
-comparison where a known name is looked up — and M39 built it on branch
-`m39-atoms-measured`. Measured, it lost: names were born as `String`s in the
+comparison where a known name is looked up — and M39 built it. Measured, it lost: names were born as `String`s in the
 tokenizer and interned when `Document::new` moved the parsed tree into the
 arena, so each name was allocated, hashed, freed, and each attribute list
 rebuilt at a smaller element size. First frames on 10,000 rows were 7%

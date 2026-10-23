@@ -52,7 +52,7 @@ impl DirectoryFonts {
         let mut entries = Vec::new();
         for path in files.into_iter().take(MAX_SCANNED_FILES) {
             let Ok(bytes) = std::fs::read(&path) else { continue };
-            if bytes.len() > crate::face::MAX_FONT_BYTES {
+            if bytes.len() > crate::face::MAX_FONT_BYTES || !crate::face::collection_header_fits(&bytes) {
                 continue;
             }
             let count = ttf_parser::fonts_in_collection(&bytes).unwrap_or(1).min(16);

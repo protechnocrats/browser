@@ -54,6 +54,11 @@ write("parse_stylesheet", "04_unterminated.css", "p{color:red;" + "q{" * 50 + "/
 write("parse_stylesheet", "05_oversized_values.css",
       "p{font-size:99999999999999px;width:1e308px;height:-1e308px;margin:calc(1px + 2 * (3px")
 write("parse_stylesheet", "06_huge_selector_list.css", ",".join(f".c{i}" for i in range(2000)) + "{a:b}")
+# Found by the fuzzer: a parent with an unclosed `(` hid its expansion's
+# commas from the nested-selector count, so each nested level multiplied the
+# selector text 100x (5 KB of CSS -> ~800 MB).
+_list = ",".join(f".c{i}" for i in range(100))
+write("parse_stylesheet", "08_nesting_unclosed_paren.css", "a:not( {" + (_list + " {") * 4 + " x: 1 " + "}" * 5)
 write("parse_stylesheet", "07_pseudo_variety.css",
       "a:nth-child(-n+3):not(.x):not(:first-child)::before{content:'\\0041'}[data-x^='a' i]{x:y}")
 
@@ -161,6 +166,9 @@ write("font_parse", "03_truetype_magic_only", b"\x00\x01\x00\x00" + b"\x00" * 60
 write("font_parse", "04_otto_huge_table_count", b"OTTO\xff\xff" + b"\x00" * 58)
 write("font_parse", "05_woff_header", b"wOFF\x00\x01\x00\x00" + b"\xff" * 40)
 write("font_parse", "06_empty", b"")
+# Found by the fuzzer: a collection header claiming 2^32-1 fonts tripped
+# ttf-parser's length debug-assert reading the offset table.
+write("font_parse", "09_ttc_huge_font_count", b"ttcf\x00\x01\x00\x00\xff\xff\xff\xff" + b"\xff" * 52)
 
 # ---- font_face_src
 write("font_face_src", "01_typical", "local(\"Open Sans\"), url(/f/open.woff2) format(\"woff2\"), url('/f/open.woff') format('woff')")
@@ -283,6 +291,16 @@ write("ipc_decode", "18_grant_unknown_bit", b"\x06\x80")
 write("ipc_decode", "19_grant_as_command", b"\x01\x07\x01")
 # Gap pass (M4's gap): a pointer release, which ends `:active`.
 write("ipc_decode", "20_pointer_up", b"\x01\x02\x04" + struct.pack("<f", 3.0) + struct.pack("<f", 4.0))
+
+# Milestone 41 (ADR 025 §4): `localStorage` served by the browser — a write
+# and a read of one origin's area, the answers, an unknown operation, and a
+# read claiming a value far past any area's quota.
+write("ipc_decode", "21_storage_set", b"\x06" + _st.pack("<Q", 3) + _s("https://news.example") + b"\x01" + _s("greeting") + _s("hello"))
+write("ipc_decode", "22_storage_get", b"\x06" + _st.pack("<Q", 4) + _s("https://news.example") + b"\x00" + _s("greeting"))
+write("ipc_decode", "23_storage_reply_value", b"\x07" + _st.pack("<Q", 4) + b"\x01" + _s("hello"))
+write("ipc_decode", "24_storage_reply_refused", b"\x07" + _st.pack("<Q", 5) + b"\x05")
+write("ipc_decode", "25_storage_unknown_op", b"\x06" + _st.pack("<Q", 6) + _s("https://news.example") + b"\x09")
+write("ipc_decode", "26_storage_huge_value", b"\x07" + _st.pack("<Q", 7) + b"\x01" + _st.pack("<I", 0x7FFFFFFF))
 
 # Milestone 37: a request the browser's filter blocked, answered as such.
 write("ipc_decode", "14_blocked_reply", b"\x04" + _st.pack("<Q", 9) + b"\x01\x03" + _s("trackers (||t.example^)"))

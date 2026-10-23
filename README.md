@@ -18,8 +18,8 @@ behind an interface so it can be replaced.
   and transform animations are compositor updates that skip layout.
 - **Thread-safe.** Each page runs on its own thread, and style, image
   decoding and parts of layout run in parallel.
-- **Sandboxed.** By default every page renders in its own process,
-  confined with Landlock and seccomp on Linux.
+- **Sandboxed.** By default every page renders in its own process, one
+  site per process, confined with Landlock and seccomp on Linux.
 - **Capability-based.** A page holds network, storage and file access only
   as scoped, revocable handles granted by the browser, never as ambient
   authority.

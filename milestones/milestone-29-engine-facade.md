@@ -85,7 +85,7 @@ Decision record: `docs/adr/005-engine-api-shape.md`.
       (fails on a synthetic host → `dom`, passes via `engine`).
 - [x] `grep -rn "Instant::now" crates/style crates/layout` is empty.
 - [x] Identical rendered output for the demo page before and after the
-      move: the snapshot recorded in commit `5d7fe76` (before the move) is
+      move: the snapshot recorded before the move is
       matched by `engine`'s `the_demo_pages_first_frame_matches_the_pre_move_golden_snapshot`.
 
 Standing Definition of Done: 724 tests, 0 failures (up from 706); clippy

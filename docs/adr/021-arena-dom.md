@@ -71,7 +71,7 @@ Two facts shape the migration:
    document plus a per-document table for the rest (never global: a page
    inventing names cannot grow memory that outlives it), and integer
    comparison for lookups by a well-known atom. It was built and measured
-   (branch `m39-atoms-measured`): interning every name as `Document::new`
+   in M39: interning every name as `Document::new`
    moves a parsed fragment in cost first frames 7% on a 10,000-row page,
    and freeing the parser's name strings and reallocating every attribute
    list left heap holes that layout's allocations filled, making clicks —

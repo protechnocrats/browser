@@ -11,17 +11,29 @@
 //! Starting a process is not something the engine does on its own: the host
 //! grants it as a capability, a [`RendererLauncher`] (the `renderer` crate
 //! provides the one that starts the `browser-renderer` binary).
+//!
+//! Milestone 41 (ADR 025): a renderer holds documents of **one site**. Its
+//! site lock is set by its first document; a navigation that lands on a
+//! document of another site is not handed to it — the page moves to a
+//! renderer that has held nothing, which is given the response, while the
+//! bridge (and so the order of the page's commands) stays the same. The
+//! host also serves the page's `localStorage` from the profile's store, and
+//! enforces the page's network grant and what each request's stated
+//! purpose may receive (`response_policy`).
 
-use crate::ipc::{self, ToHost, ToRenderer, WireContext, WireFrame};
+use crate::ipc::{self, StorageAnswer, StorageOp, ToHost, ToRenderer, WireContext, WireFrame};
 use crate::page_thread::{Mailbox, WakerSlot};
 use crate::renderer::{from_nanos, to_nanos};
+use crate::response_policy;
 use crate::{EngineEvent, FrameStats, ImageLoading, LoadRequest, PageCommand, PageId, Scene, Viewport};
+use capability::PageGrants;
 use diagnostics::Guard;
-use network::{Initiator, NetworkContext, NetworkError, RequestContext};
-use origin::Origin;
+use network::{FetchResponse, Initiator, NetworkContext, NetworkError, RequestContext};
+use origin::{Origin, Site, StorageKey};
 use std::collections::{HashMap, VecDeque};
 use std::io::{Read, Write};
-use std::sync::{Arc, Mutex, PoisonError};
+use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
+use std::sync::{Arc, Mutex, MutexGuard, PoisonError};
 use std::time::{Duration, Instant};
 
 /// Starts renderer processes — a capability the host grants the engine.
@@ -60,57 +72,227 @@ pub enum Isolation {
 const MAX_IMAGE_BYTES_PER_PAGE: usize = 1024 * 1024 * 1024;
 
 type SharedWriter = Arc<Mutex<Box<dyn Write + Send>>>;
-type SharedControl = Arc<Mutex<Box<dyn RendererControl>>>;
+
+fn lock<T>(m: &Mutex<T>) -> MutexGuard<'_, T> {
+    m.lock().unwrap_or_else(PoisonError::into_inner)
+}
 
 fn send(out: &SharedWriter, message: &ToRenderer) -> bool {
     let bytes = message.encode();
-    let mut out = out.lock().unwrap_or_else(PoisonError::into_inner);
+    let mut out = lock(out);
     ipc::write_frame(&mut *out, &bytes).is_ok()
 }
 
 fn wake(slot: &WakerSlot) {
-    let waker = slot.lock().unwrap_or_else(PoisonError::into_inner).clone();
+    let waker = lock(slot).clone();
     if let Some(waker) = waker {
         waker();
     }
 }
 
-/// What the engine keeps of a page's renderer.
-pub(crate) struct ProcessPage {
-    control: SharedControl,
+/// Renderers started ahead of need — one, shared by the engine's new pages
+/// and by pages moving to a renderer for another site (Milestone 41). A
+/// spare has never held a document, so it suits any site: it is locked to
+/// one by the first document it is given (ADR 025 §2).
+pub(crate) struct Spares {
+    launcher: Arc<dyn RendererLauncher>,
+    spare: Mutex<Option<RendererConnection>>,
+    closed: AtomicBool,
+}
+
+impl Spares {
+    /// Starts the first spare now.
+    pub fn new(launcher: Arc<dyn RendererLauncher>) -> Arc<Spares> {
+        let spare = launcher.launch().ok();
+        Arc::new(Spares { launcher, spare: Mutex::new(spare), closed: AtomicBool::new(false) })
+    }
+
+    /// A renderer that has never held a document: the spare, with the next
+    /// one started behind it, or a new one if there is no spare.
+    fn take(&self) -> std::io::Result<RendererConnection> {
+        let taken = lock(&self.spare).take();
+        let connection = match taken {
+            Some(spare) => spare,
+            None => self.launcher.launch()?,
+        };
+        if !self.closed.load(Ordering::Acquire) {
+            let next = self.launcher.launch().ok();
+            let mut spare = lock(&self.spare);
+            // Checked again under the lock: `close` may have run meanwhile.
+            match next {
+                Some(mut next) if self.closed.load(Ordering::Acquire) || spare.is_some() => next.control.terminate(),
+                Some(next) => *spare = Some(next),
+                None => {}
+            }
+        }
+        Ok(connection)
+    }
+
+    /// Ends the spare, and starts no more (the engine is going away).
+    pub fn close(&self) {
+        self.closed.store(true, Ordering::Release);
+        if let Some(mut spare) = lock(&self.spare).take() {
+            spare.control.terminate();
+        }
+    }
+}
+
+/// Numbers every renderer the hosts in this process start (diagnostics:
+/// [`ProcessPage::serial`]).
+static RENDERER_SERIAL: AtomicU64 = AtomicU64::new(1);
+
+/// One renderer process, as its page's host sees it.
+struct Renderer {
+    serial: u64,
+    out: SharedWriter,
+    control: Mutex<Box<dyn RendererControl>>,
     pid: Option<u32>,
-    sandboxed: Arc<Mutex<Option<(bool, String)>>>,
+    sandboxed: Mutex<Option<(bool, String)>>,
+    lock: Mutex<SiteLock>,
+    progress: Mutex<Progress>,
+    /// The host-clock instant this renderer's tick times count from.
+    epoch: Instant,
+    /// Replaced by a renderer for another site (Milestone 41): what it still
+    /// sends is ignored, and it is ended.
+    retired: AtomicBool,
+    /// A renderer that took over its page for another site draws nothing
+    /// until its first document commits or fails: the old document stays
+    /// on screen meanwhile (ADR 025 §3).
+    awaiting_commit: AtomicBool,
+}
+
+impl Renderer {
+    fn send(&self, message: &ToRenderer) -> bool {
+        send(&self.out, message)
+    }
+
+    /// Asks the renderer to advance to `tick` (host clock); it owes the tick
+    /// from now (ADR 013).
+    fn tick(&self, tick: Instant) -> bool {
+        {
+            let mut progress = lock(&self.progress);
+            if !progress.owes_a_tick() {
+                progress.since = Instant::now(); // it starts owing now
+            }
+            progress.sent = Some(progress.sent.map_or(tick, |t| t.max(tick)));
+        }
+        self.send(&ToRenderer::Tick(to_nanos(self.epoch, tick)))
+    }
+
+    fn terminate(&self) {
+        lock(&self.control).terminate();
+    }
+
+    fn is_retired(&self) -> bool {
+        self.retired.load(Ordering::Acquire)
+    }
+
+    /// Takes the renderer out of service: told to shut down, then ended.
+    fn retire(&self) {
+        self.retired.store(true, Ordering::Release);
+        self.send(&ToRenderer::Shutdown);
+        self.terminate();
+    }
+}
+
+/// What a renderer that takes over a page must be told to carry on where
+/// the old one was.
+#[derive(Clone, Copy)]
+struct Carry {
+    viewport: Viewport,
+    visible: bool,
+    grants: u8,
+}
+
+/// A page in process mode, on the host's side: the renderer it runs in now,
+/// and what a renderer that takes over from it needs (Milestone 41).
+struct PageHost {
+    id: PageId,
+    mailbox: Arc<Mailbox>,
+    spares: Arc<Spares>,
+    network: NetworkContext,
+    waker: WakerSlot,
+    image_loading: ImageLoading,
+    fonts: Option<Arc<dyn text::FontSource>>,
+    catalog: Vec<text::CatalogEntry>,
+    fingerprint: privacy::FingerprintPolicy,
+    unresponsive_after: Duration,
+    state: Mutex<HostState>,
+}
+
+struct HostState {
+    current: Option<Arc<Renderer>>,
+    viewport: Viewport,
+    visible: bool,
+    /// What the host granted the page, enforced here too (ADR 025 §4–5): a
+    /// revocation reaches it at once (the handles share their token with
+    /// the engine's), a new grant as its command passes the bridge.
+    grants: PageGrants,
+    /// The latest tick sent to the page.
+    last_tick: Option<Instant>,
+    /// The URL of the navigation last announced for the page
+    /// (`NavigationStarted`), whichever renderer announced it: a renderer
+    /// that takes the navigation over does not announce it again.
+    announced: Option<String>,
+}
+
+impl HostState {
+    fn carry(&self) -> Carry {
+        Carry { viewport: self.viewport, visible: self.visible, grants: self.grants.bits() }
+    }
+
+    fn is_current(&self, renderer: &Arc<Renderer>) -> bool {
+        self.current.as_ref().is_some_and(|c| Arc::ptr_eq(c, renderer))
+    }
+}
+
+/// What the engine keeps of a page in process mode.
+pub(crate) struct ProcessPage {
+    host: Arc<PageHost>,
 }
 
 impl ProcessPage {
-    pub fn pid(&self) -> Option<u32> {
-        self.pid
+    fn current(&self) -> Option<Arc<Renderer>> {
+        lock(&self.host.state).current.clone()
     }
 
-    /// Whether the renderer reported running sandboxed, and how.
+    pub fn pid(&self) -> Option<u32> {
+        self.current()?.pid
+    }
+
+    /// Whether the page's renderer reported running sandboxed, and how.
     pub fn sandbox(&self) -> Option<(bool, String)> {
-        self.sandboxed.lock().unwrap_or_else(PoisonError::into_inner).clone()
+        lock(&self.current()?.sandboxed).clone()
+    }
+
+    /// The number the host gave the page's current renderer: a new one when
+    /// the page moved to a renderer for another site.
+    pub fn serial(&self) -> Option<u64> {
+        Some(self.current()?.serial)
     }
 }
 
 impl Drop for ProcessPage {
     fn drop(&mut self) {
-        self.control.lock().unwrap_or_else(PoisonError::into_inner).terminate();
+        if let Some(renderer) = self.current() {
+            renderer.terminate();
+        }
     }
 }
 
 pub(crate) struct ProcessSetup {
-    pub launcher: Arc<dyn RendererLauncher>,
-    /// A renderer started ahead of need, used instead of launching one.
-    pub spare: Option<RendererConnection>,
+    /// Milestone 41: renderers started ahead of need, shared with the engine.
+    pub spares: Arc<Spares>,
     pub network: NetworkContext,
     pub viewport: Viewport,
     pub image_loading: ImageLoading,
     pub waker: WakerSlot,
     /// Milestone 35: the host's fonts, served to the renderer by key.
     pub fonts: Option<Arc<dyn text::FontSource>>,
-    /// Milestone 36: the page's grants, as the renderer protocol lists them.
-    pub grants: u8,
+    /// Milestone 36: the page's grants. The renderer is told their kinds
+    /// and mints its own handles; the host keeps these and enforces them
+    /// too (Milestone 41, ADR 025 §4–5).
+    pub grants: PageGrants,
     /// Milestone 37: what the page's scripts may observe.
     pub fingerprint: privacy::FingerprintPolicy,
     /// Milestone 38a: how long the renderer may owe a tick without progress
@@ -135,199 +317,395 @@ impl Progress {
     }
 }
 
-type SharedProgress = Arc<Mutex<Progress>>;
-
 /// How often the watchdog looks: at least once a second, and four times per
 /// bound for short bounds (tests).
 fn watchdog_interval(bound: Duration) -> Duration {
     (bound / 4).clamp(Duration::from_millis(10), Duration::from_secs(1))
 }
 
-/// Starts page `id`'s renderer and the two threads that connect it to
-/// `mailbox`.
+/// Starts page `id`'s renderer and the bridge that connects it to `mailbox`.
 pub(crate) fn spawn(id: PageId, mailbox: Arc<Mailbox>, setup: ProcessSetup) -> std::io::Result<ProcessPage> {
-    let connection = match setup.spare {
-        Some(spare) => spare,
-        None => setup.launcher.launch()?,
-    };
-    let RendererConnection { to_renderer, from_renderer, control } = connection;
-    let pid = control.pid();
-    let out: SharedWriter = Arc::new(Mutex::new(to_renderer));
-    let control: SharedControl = Arc::new(Mutex::new(control));
-    let epoch = Instant::now();
-    let lock = Arc::new(Mutex::new(SiteLock::default()));
-    let sandboxed = Arc::new(Mutex::new(None));
-    let progress: SharedProgress = Arc::new(Mutex::new(Progress { sent: None, done: None, since: Instant::now() }));
     let catalog = setup.fonts.as_ref().map(|f| f.catalog()).unwrap_or_default();
-    if !send(&out, &ToRenderer::Setup { viewport: setup.viewport, image_loading: setup.image_loading, fonts: catalog.clone(), grants: setup.grants, fingerprint: setup.fingerprint }) {
-        control.lock().unwrap_or_else(PoisonError::into_inner).terminate();
-        return Err(std::io::Error::new(std::io::ErrorKind::BrokenPipe, "the renderer did not start"));
+    let host = Arc::new(PageHost {
+        id,
+        mailbox,
+        spares: setup.spares,
+        network: setup.network,
+        waker: setup.waker,
+        image_loading: setup.image_loading,
+        fonts: setup.fonts,
+        catalog,
+        fingerprint: setup.fingerprint,
+        unresponsive_after: setup.unresponsive_after,
+        state: Mutex::new(HostState { current: None, viewport: setup.viewport, visible: true, grants: setup.grants, last_tick: None, announced: None }),
+    });
+    let carry = lock(&host.state).carry();
+    let renderer = host.start(host.spares.take()?, SiteLock::default(), false, carry)?;
+    lock(&host.state).current = Some(renderer);
+    {
+        let host = Arc::clone(&host);
+        std::thread::Builder::new().name(format!("bridge-{}", id.0)).spawn(move || host.bridge())?;
+    }
+    Ok(ProcessPage { host })
+}
+
+impl PageHost {
+    /// Sets up a started renderer for this page — `lock` says which
+    /// documents it may hold, `carry` what it must know — and starts the
+    /// threads that read it and watch it.
+    fn start(self: &Arc<Self>, connection: RendererConnection, lock: SiteLock, awaiting_commit: bool, carry: Carry) -> std::io::Result<Arc<Renderer>> {
+        let RendererConnection { to_renderer, from_renderer, control } = connection;
+        let renderer = Arc::new(Renderer {
+            serial: RENDERER_SERIAL.fetch_add(1, Ordering::Relaxed),
+            out: Arc::new(Mutex::new(to_renderer)),
+            pid: control.pid(),
+            control: Mutex::new(control),
+            sandboxed: Mutex::new(None),
+            lock: Mutex::new(lock),
+            progress: Mutex::new(Progress { sent: None, done: None, since: Instant::now() }),
+            epoch: Instant::now(),
+            retired: AtomicBool::new(false),
+            awaiting_commit: AtomicBool::new(awaiting_commit),
+        });
+        let setup = ToRenderer::Setup { viewport: carry.viewport, image_loading: self.image_loading, fonts: self.catalog.clone(), grants: carry.grants, fingerprint: self.fingerprint };
+        if !renderer.send(&setup) || (!carry.visible && !renderer.send(&ToRenderer::Command(PageCommand::SetVisible(false)))) {
+            renderer.terminate();
+            return Err(std::io::Error::new(std::io::ErrorKind::BrokenPipe, "the renderer did not start"));
+        }
+        {
+            let (host, renderer) = (Arc::clone(self), Arc::clone(&renderer));
+            std::thread::Builder::new().name(format!("reader-{}", self.id.0)).spawn(move || host.read(&renderer, from_renderer))?;
+        }
+        {
+            let (host, renderer) = (Arc::clone(self), Arc::clone(&renderer));
+            std::thread::Builder::new().name(format!("watchdog-{}", self.id.0)).spawn(move || host.watch(&renderer))?;
+        }
+        Ok(renderer)
     }
 
-    // Bridge: the mailbox's work, to the renderer.
-    {
-        let (mailbox, out, control, lock, progress) = (Arc::clone(&mailbox), Arc::clone(&out), Arc::clone(&control), Arc::clone(&lock), Arc::clone(&progress));
-        std::thread::Builder::new().name(format!("bridge-{}", id.0)).spawn(move || {
-            while let Some((commands, tick)) = mailbox.wait_for_work() {
-                for command in commands {
-                    if let PageCommand::Load(LoadRequest::Url(url)) = &command {
-                        // The one browser-initiated navigation this page may make.
-                        lock.lock().unwrap_or_else(PoisonError::into_inner).expect_typed(url);
-                    }
-                    if !send(&out, &ToRenderer::Command(command)) {
-                        return; // the reader reports why
-                    }
-                }
-                {
-                    let mut progress = progress.lock().unwrap_or_else(PoisonError::into_inner);
-                    if !progress.owes_a_tick() {
-                        progress.since = Instant::now(); // it starts owing now
-                    }
-                    progress.sent = Some(progress.sent.map_or(tick, |t| t.max(tick)));
-                }
-                if !send(&out, &ToRenderer::Tick(to_nanos(epoch, tick))) {
-                    return;
-                }
+    /// The mailbox's work, to the page's current renderer — the same thread
+    /// across renderers, so commands keep their order.
+    fn bridge(self: &Arc<Self>) {
+        while let Some((commands, tick)) = self.mailbox.wait_for_work() {
+            for command in commands {
+                self.forward(command);
             }
-            // Shut down: tell it, then make sure.
-            send(&out, &ToRenderer::Shutdown);
-            control.lock().unwrap_or_else(PoisonError::into_inner).terminate();
-        })?;
+            // Under the state lock, so a renderer taking over cannot miss it.
+            let mut state = lock(&self.state);
+            state.last_tick = Some(state.last_tick.map_or(tick, |t| t.max(tick)));
+            if let Some(renderer) = &state.current {
+                renderer.tick(tick);
+            }
+        }
+        // Shut down: tell it, then make sure.
+        if let Some(renderer) = lock(&self.state).current.take() {
+            renderer.retire();
+        }
     }
 
-    // Reader: the renderer's results, into the mailbox.
-    {
-        let (mailbox, out, control, sandboxed, progress) = (Arc::clone(&mailbox), Arc::clone(&out), Arc::clone(&control), Arc::clone(&sandboxed), Arc::clone(&progress));
-        let (network, waker) = (setup.network, Arc::clone(&setup.waker));
-        let setup_fonts = setup.fonts;
-        let mut input = from_renderer;
-        std::thread::Builder::new().name(format!("reader-{}", id.0)).spawn(move || {
-            let mut frames = FrameReceiver::default();
-            let crash = |reason: String| {
-                control.lock().unwrap_or_else(PoisonError::into_inner).terminate();
-                mailbox.mark_crashed(reason);
-                wake(&waker);
-            };
-            loop {
-                let bytes = match ipc::read_frame(&mut input) {
-                    Ok(Some(bytes)) => bytes,
-                    Ok(None) | Err(_) => {
-                        if mailbox.is_shut_down() || mailbox.is_crashed() {
-                            return; // closed on purpose, or ended by the watchdog
-                        }
-                        let status = control.lock().unwrap_or_else(PoisonError::into_inner).exit_status();
-                        diagnostics::guard(Guard::PageCrashed, "a renderer process ended");
-                        return crash(format!("the renderer process ended ({})", status.unwrap_or_else(|| "no exit status".into())));
-                    }
-                };
-                let message = match ToHost::decode(&bytes) {
-                    Ok(m) => m,
+    /// Sends one command to the current renderer, keeping what a renderer
+    /// taking over would need. A host-made HTML document of another site
+    /// goes to a renderer for that site.
+    fn forward(self: &Arc<Self>, command: PageCommand) {
+        let mut state = lock(&self.state);
+        match &command {
+            PageCommand::Resize(viewport) => state.viewport = viewport.sanitized(),
+            PageCommand::SetVisible(visible) => state.visible = *visible,
+            PageCommand::Grant(grants) => state.grants.merge(grants.clone()),
+            PageCommand::Revoke(kind) => state.grants.revoke(*kind),
+            _ => {}
+        }
+        let Some(current) = state.current.clone() else { return };
+        match &command {
+            // The one browser-initiated navigation this page may make.
+            PageCommand::Load(LoadRequest::Url(url)) => lock(&current.lock).expect_typed(url),
+            PageCommand::Load(LoadRequest::Html { url, .. }) if !lock(&current.lock).admit_html(url.as_deref()) => {
+                let mut site_lock = SiteLock::default();
+                site_lock.admit_html(url.as_deref());
+                let started = self.spares.take().and_then(|c| self.start(c, site_lock, true, state.carry()));
+                let renderer = match started {
+                    Ok(renderer) => renderer,
                     Err(e) => {
-                        diagnostics::guard(Guard::RendererMessageRejected, e.0);
-                        return crash(format!("the renderer sent a malformed message: {}", e.0));
+                        // Never into a renderer of another site.
+                        drop(state);
+                        return self.crash(&current, format!("could not start a renderer for the document's site: {e}"));
                     }
                 };
-                match message {
-                    ToHost::Published { events, frame, next_wake, completed_tick } => {
-                        let events: Vec<EngineEvent> = events.into_iter().map(|e| with_page(e, id)).collect();
-                        let frame = match frame.map(|f| frames.rebuild(*f)) {
-                            Some(Err(reason)) => {
-                                diagnostics::guard(Guard::RendererMessageRejected, reason);
-                                return crash(format!("the renderer sent a malformed frame: {reason}"));
-                            }
-                            Some(Ok(frame)) => Some(frame),
-                            None => None,
-                        };
-                        let completed = from_nanos(epoch, completed_tick);
-                        {
-                            let mut progress = progress.lock().unwrap_or_else(PoisonError::into_inner);
-                            // Only a tick finished counts as progress: a renderer
-                            // repeating an old report cannot hold off the
-                            // watchdog (ADR 013).
-                            if progress.done.is_none_or(|done| completed > done) {
-                                progress.done = Some(completed);
-                                progress.since = Instant::now();
-                            }
-                        }
-                        mailbox.publish(events, frame, next_wake.map(|n| from_nanos(epoch, n)), completed);
-                        wake(&waker);
+                renderer.send(&ToRenderer::Command(command));
+                if let Some(tick) = state.last_tick {
+                    renderer.tick(tick);
+                }
+                state.current = Some(Arc::clone(&renderer));
+                drop(state);
+                self.moved(&current, &renderer);
+                return;
+            }
+            _ => {}
+        }
+        current.send(&ToRenderer::Command(command));
+    }
+
+    /// The page left `old` for `new`, a renderer for its new site.
+    fn moved(&self, old: &Arc<Renderer>, new: &Arc<Renderer>) {
+        diagnostics::tracing::info!(target: "engine::process", page = self.id.0, from = old.serial, to = new.serial, "page moved to a renderer for its new site");
+        old.retire();
+    }
+
+    /// Ends the page as crashed — unless `renderer` is no longer its own.
+    fn crash(&self, renderer: &Arc<Renderer>, reason: String) {
+        if renderer.is_retired() {
+            return;
+        }
+        // Marked first: ending the process closes its pipe, and its reader
+        // must not report that as the reason.
+        self.mailbox.mark_crashed(reason);
+        renderer.terminate();
+        wake(&self.waker);
+    }
+
+    /// The renderer's results, into the mailbox.
+    fn read(self: &Arc<Self>, renderer: &Arc<Renderer>, mut input: Box<dyn Read + Send>) {
+        let mut frames = FrameReceiver::default();
+        loop {
+            let bytes = match ipc::read_frame(&mut input) {
+                Ok(Some(bytes)) => bytes,
+                Ok(None) | Err(_) => {
+                    if renderer.is_retired() || self.mailbox.is_shut_down() || self.mailbox.is_crashed() {
+                        return; // replaced, closed on purpose, or ended by the watchdog
                     }
-                    ToHost::Image { id: image, width, height, rgba } => {
-                        if let Err(reason) = frames.store_image(image, width, height, rgba) {
+                    let status = lock(&renderer.control).exit_status();
+                    diagnostics::guard(Guard::PageCrashed, "a renderer process ended");
+                    return self.crash(renderer, format!("the renderer process ended ({})", status.unwrap_or_else(|| "no exit status".into())));
+                }
+            };
+            if renderer.is_retired() {
+                continue; // read on to the end of its output, and ignore it
+            }
+            let message = match ToHost::decode(&bytes) {
+                Ok(m) => m,
+                Err(e) => {
+                    diagnostics::guard(Guard::RendererMessageRejected, e.0);
+                    return self.crash(renderer, format!("the renderer sent a malformed message: {}", e.0));
+                }
+            };
+            match message {
+                ToHost::Published { events, frame, next_wake, completed_tick } => {
+                    // Rebuilt even when not shown: later frames send only
+                    // what changed since this one.
+                    let mut frame = match frame.map(|f| frames.rebuild(*f)) {
+                        Some(Err(reason)) => {
                             diagnostics::guard(Guard::RendererMessageRejected, reason);
-                            return crash(format!("the renderer sent too much image data: {reason}"));
+                            return self.crash(renderer, format!("the renderer sent a malformed frame: {reason}"));
+                        }
+                        Some(Ok(frame)) => Some(frame),
+                        None => None,
+                    };
+                    let completed = from_nanos(renderer.epoch, completed_tick);
+                    {
+                        let mut progress = lock(&renderer.progress);
+                        // Only a tick finished counts as progress: a renderer
+                        // repeating an old report cannot hold off the
+                        // watchdog (ADR 013).
+                        if progress.done.is_none_or(|done| completed > done) {
+                            progress.done = Some(completed);
+                            progress.since = Instant::now();
                         }
                     }
-                    ToHost::Crashed { reason } => return crash(reason),
-                    ToHost::FetchRequest { id: request, url, context } => {
-                        let checked = lock.lock().unwrap_or_else(PoisonError::into_inner).check(&url, &context);
-                        match checked {
-                            Err(reason) => {
-                                diagnostics::guard(Guard::RendererRequestRefused, reason);
-                                send(&out, &ToRenderer::FetchReply { id: request, result: Err(NetworkError::Transport(format!("refused: {reason}"))) });
+                    let mut events: Vec<EngineEvent> = events.into_iter().map(|e| with_page(e, self.id)).collect();
+                    {
+                        // Under the state lock, so a renderer the page left
+                        // while this was in flight publishes nothing, and its
+                        // successor sees what it did publish.
+                        let mut state = lock(&self.state);
+                        if !state.is_current(renderer) {
+                            continue;
+                        }
+                        if renderer.awaiting_commit.load(Ordering::Acquire) {
+                            // Announced already, by the renderer the page left.
+                            events.retain(|e| !matches!(e, EngineEvent::NavigationStarted { url, .. } if state.announced.as_ref() == Some(url)));
+                            if events.iter().any(|e| matches!(e, EngineEvent::NavigationCommitted { .. } | EngineEvent::NavigationFailed { .. })) {
+                                renderer.awaiting_commit.store(false, Ordering::Release);
+                            } else {
+                                frame = None; // the old document stays on screen
                             }
-                            Ok(ctx) => {
-                                let (out, lock, network) = (Arc::clone(&out), Arc::clone(&lock), network.clone());
-                                // On the bounded fetch pool, as any fetch.
-                                let submitted = network::pool::FetchPool::global().submit(
-                                    network::pool::host_of(&url),
-                                    Box::new(move || {
-                                        let result = network.fetch_with(&url, &ctx);
-                                        if let (Ok(response), true) = (&result, ctx.is_navigation) {
-                                            lock.lock().unwrap_or_else(PoisonError::into_inner).document(&response.final_url);
-                                        }
-                                        send(&out, &ToRenderer::FetchReply { id: request, result });
-                                    }),
-                                );
-                                if submitted.is_err() {
-                                    diagnostics::guard(Guard::FetchQueueFull, "too many fetches waiting; request refused");
-                                }
+                        }
+                        for event in &events {
+                            if let EngineEvent::NavigationStarted { url, .. } = event {
+                                state.announced = Some(url.clone());
                             }
                         }
+                        self.mailbox.publish(events, frame, next_wake.map(|n| from_nanos(renderer.epoch, n)), completed);
                     }
-                    ToHost::FontRequest { id: request, key, index } => {
-                        // Only a font of the catalog this renderer was given.
-                        let entry = catalog.iter().find(|e| e.key == key && e.index == index).cloned();
-                        let (reply_out, source) = (Arc::clone(&out), setup_fonts.clone());
-                        let spawned = std::thread::Builder::new().name("font-load".into()).spawn(move || {
-                            let bytes = entry.and_then(|e| source.and_then(|s| s.load(&e))).filter(|b| b.len() <= text::MAX_FONT_BYTES);
-                            send(&reply_out, &ToRenderer::FontReply { id: request, bytes });
-                        });
-                        if spawned.is_err() {
-                            send(&out, &ToRenderer::FontReply { id: request, bytes: None });
-                        }
-                    }
-                    ToHost::Started { sandboxed: on, detail } => {
-                        diagnostics::tracing::info!(target: "engine::process", page = id.0, sandboxed = on, detail = %detail, "renderer started");
-                        *sandboxed.lock().unwrap_or_else(PoisonError::into_inner) = Some((on, detail));
+                    wake(&self.waker);
+                }
+                ToHost::Image { id: image, width, height, rgba } => {
+                    if let Err(reason) = frames.store_image(image, width, height, rgba) {
+                        diagnostics::guard(Guard::RendererMessageRejected, reason);
+                        return self.crash(renderer, format!("the renderer sent too much image data: {reason}"));
                     }
                 }
+                ToHost::Crashed { reason } => return self.crash(renderer, reason),
+                ToHost::FetchRequest { id, url, context } => self.fetch(renderer, id, url, &context),
+                ToHost::FontRequest { id: request, key, index } => {
+                    // Only a font of the catalog this renderer was given.
+                    let entry = self.catalog.iter().find(|e| e.key == key && e.index == index).cloned();
+                    let (reply_to, source) = (Arc::clone(renderer), self.fonts.clone());
+                    let spawned = std::thread::Builder::new().name("font-load".into()).spawn(move || {
+                        let bytes = entry.and_then(|e| source.and_then(|s| s.load(&e))).filter(|b| b.len() <= text::MAX_FONT_BYTES);
+                        reply_to.send(&ToRenderer::FontReply { id: request, bytes });
+                    });
+                    if spawned.is_err() {
+                        renderer.send(&ToRenderer::FontReply { id: request, bytes: None });
+                    }
+                }
+                ToHost::Started { sandboxed: on, detail } => {
+                    diagnostics::tracing::info!(target: "engine::process", page = self.id.0, renderer = renderer.serial, sandboxed = on, detail = %detail, "renderer started");
+                    *lock(&renderer.sandboxed) = Some((on, detail));
+                }
+                ToHost::Storage { id, origin, op } => {
+                    let answer = self.storage(renderer, &origin, op);
+                    renderer.send(&ToRenderer::StorageReply { id, answer });
+                }
             }
-        })?;
+        }
     }
-    // Watchdog (ADR 013): a renderer that owes a tick and makes no progress
-    // for `unresponsive_after` is ended. Nothing the renderer says pauses it.
-    {
-        let (mailbox, control, waker, bound) = (Arc::clone(&mailbox), Arc::clone(&control), Arc::clone(&setup.waker), setup.unresponsive_after);
-        std::thread::Builder::new().name(format!("watchdog-{}", id.0)).spawn(move || loop {
-            std::thread::sleep(watchdog_interval(bound));
-            if mailbox.is_shut_down() || mailbox.is_crashed() {
+
+    /// Watchdog (ADR 013): a renderer that owes a tick and makes no progress
+    /// for `unresponsive_after` is ended. Nothing the renderer says pauses it.
+    fn watch(&self, renderer: &Arc<Renderer>) {
+        loop {
+            std::thread::sleep(watchdog_interval(self.unresponsive_after));
+            if renderer.is_retired() || self.mailbox.is_shut_down() || self.mailbox.is_crashed() {
                 return;
             }
             let stalled = {
-                let progress = progress.lock().unwrap_or_else(PoisonError::into_inner);
-                progress.owes_a_tick() && progress.since.elapsed() >= bound
+                let progress = lock(&renderer.progress);
+                progress.owes_a_tick() && progress.since.elapsed() >= self.unresponsive_after
             };
             if stalled {
                 diagnostics::guard(Guard::PageUnresponsive, "a renderer made no progress for the unresponsive bound; it was ended");
-                mailbox.mark_crashed(format!("the page stopped responding for {} s; its renderer was ended", bound.as_secs_f32()));
-                control.lock().unwrap_or_else(PoisonError::into_inner).terminate();
-                wake(&waker);
+                return self.crash(renderer, format!("the page stopped responding for {} s; its renderer was ended", self.unresponsive_after.as_secs_f32()));
+            }
+        }
+    }
+
+    /// Whether the page holds its network capability now.
+    fn network_granted(&self) -> bool {
+        lock(&self.state).grants.network.as_ref().is_some_and(|n| !n.is_revoked())
+    }
+
+    /// A request the renderer asks the host to make (ADR 016 §5, ADR 025).
+    fn fetch(self: &Arc<Self>, renderer: &Arc<Renderer>, id: u64, url: String, context: &WireContext) {
+        let refuse = |reason: &str| {
+            diagnostics::guard(Guard::RendererRequestRefused, reason);
+            renderer.send(&ToRenderer::FetchReply { id, result: Err(NetworkError::Transport(format!("refused: {reason}"))) });
+        };
+        let checked = lock(&renderer.lock).check(&url, context);
+        let request = match checked {
+            Err(reason) => return refuse(reason),
+            Ok(Checked::Prefetched(response)) => {
+                // The document this renderer was started for, fetched before
+                // it existed.
+                lock(&renderer.lock).admit(&response.final_url);
+                renderer.send(&ToRenderer::FetchReply { id, result: Ok(response) });
                 return;
             }
-        })?;
+            Ok(Checked::Fetch(request)) => request,
+        };
+        // ADR 025 §5: a page without the network capability gets only what
+        // its document loader asks for — whatever its renderer says.
+        if !request.is_navigation && !response_policy::is_loader_request(request.destination) && !self.network_granted() {
+            return refuse("a script request from a page that holds no network capability");
+        }
+        let (host, asker) = (Arc::clone(self), Arc::clone(renderer));
+        // On the bounded fetch pool, as any fetch.
+        let submitted = network::pool::FetchPool::global().submit(
+            network::pool::host_of(&url),
+            Box::new(move || {
+                let result = match host.network.fetch_with(&url, &request) {
+                    Ok(response) if request.is_navigation => {
+                        if !lock(&asker.lock).admit(&response.final_url) {
+                            // A document of another site: never this
+                            // renderer's. The page moves to one for its site.
+                            return host.move_to_site(&asker, id, url, response);
+                        }
+                        Ok(response)
+                    }
+                    Ok(response) => match response_policy::withheld(&request, &response) {
+                        Some(reason) => {
+                            diagnostics::guard(Guard::RendererResponseWithheld, reason);
+                            Ok(response_policy::emptied(response))
+                        }
+                        None => Ok(response),
+                    },
+                    Err(e) => Err(e),
+                };
+                asker.send(&ToRenderer::FetchReply { id, result });
+            }),
+        );
+        if submitted.is_err() {
+            diagnostics::guard(Guard::FetchQueueFull, "too many fetches waiting; request refused");
+            renderer.send(&ToRenderer::FetchReply { id, result: Err(NetworkError::Transport("too many requests waiting".into())) });
+        }
     }
-    Ok(ProcessPage { control, pid, sandboxed })
+
+    /// Milestone 41 (ADR 025 §3): `old`'s navigation to `url` landed on a
+    /// document of another site. A renderer that has held no document takes
+    /// the page over, locked to that site, and is handed the response — the
+    /// browser does not fetch it twice; `old` is ended. If no renderer can
+    /// be started, the navigation fails and the old document stays.
+    fn move_to_site(self: &Arc<Self>, old: &Arc<Renderer>, id: u64, url: String, response: FetchResponse) {
+        let mut state = lock(&self.state);
+        if !state.is_current(old) {
+            return; // the page already left it
+        }
+        let started = self.spares.take().and_then(|c| self.start(c, SiteLock::for_document(&url, response), true, state.carry()));
+        let renderer = match started {
+            Ok(renderer) => renderer,
+            Err(e) => {
+                drop(state);
+                old.send(&ToRenderer::FetchReply { id, result: Err(NetworkError::Transport(format!("no renderer could be started for the document's site: {e}"))) });
+                return;
+            }
+        };
+        renderer.send(&ToRenderer::Command(PageCommand::Load(LoadRequest::Url(url))));
+        if let Some(tick) = state.last_tick {
+            renderer.tick(tick);
+        }
+        state.current = Some(Arc::clone(&renderer));
+        drop(state);
+        self.moved(old, &renderer);
+    }
+
+    /// Milestone 41 (ADR 025 §4): one `localStorage` operation, made in the
+    /// profile's store through the page's own storage grant — only for an
+    /// origin this renderer has loaded.
+    fn storage(&self, renderer: &Arc<Renderer>, origin: &str, op: StorageOp) -> StorageAnswer {
+        let parsed = Origin::parse(origin);
+        if parsed.is_opaque() || parsed.serialize() != origin || !lock(&renderer.lock).has_document(&parsed) {
+            diagnostics::guard(Guard::RendererRequestRefused, "storage of an origin this renderer never loaded");
+            return StorageAnswer::Refused;
+        }
+        let Some(grant) = lock(&self.state).grants.storage.clone() else {
+            diagnostics::guard(Guard::RendererRequestRefused, "storage from a page that holds no storage capability");
+            return StorageAnswer::Refused;
+        };
+        let scoped = grant.scope(&StorageKey::first_party(&parsed));
+        let Ok(area) = scoped.area() else { return StorageAnswer::Refused };
+        match op {
+            StorageOp::Get(name) => StorageAnswer::Value(area.get(&name)),
+            StorageOp::Set(name, value) => StorageAnswer::Written(area.set(name, value).is_ok()),
+            StorageOp::Remove(name) => {
+                area.remove(&name);
+                StorageAnswer::Done
+            }
+            StorageOp::Clear => {
+                area.clear();
+                StorageAnswer::Done
+            }
+            StorageOp::Length => StorageAnswer::Length(u32::try_from(area.len()).unwrap_or(u32::MAX)),
+        }
+    }
 }
 
 fn with_page(event: EngineEvent, page: PageId) -> EngineEvent {
@@ -422,20 +800,37 @@ impl FrameReceiver {
     }
 }
 
-/// What a page's renderer may ask the network for (ADR 016 §5). The renderer
-/// states each request's initiator; the host believes only what it has seen:
+/// What a page's renderer may ask the network for (ADR 016 §5), and which
+/// documents it may hold (Milestone 41, ADR 025 §2). The renderer states each
+/// request's initiator; the host believes only what it has seen:
 ///
 /// - a request with **no initiator** (a typed URL: no `SameSite` limits) only
 ///   if it is a navigation to a URL the host itself told the page to load;
 /// - a request from a **tuple origin** only if a document of that origin has
-///   been loaded into this page — by a navigation the host performed;
+///   been loaded into this renderer — by a navigation the host performed, or
+///   an HTML document the host gave it;
 /// - an **opaque** origin always (it is cross-site to everything, so it
 ///   carries nothing a forged one could gain).
+///
+/// Every document a renderer holds is of one **site**: the first sets it,
+/// and the host never hands it a document of another.
 #[derive(Default)]
 pub(crate) struct SiteLock {
+    site: Option<Site>,
     typed: VecDeque<String>,
     documents: VecDeque<Origin>,
     opaque: HashMap<u64, Origin>,
+    /// A navigation response the host fetched before this renderer existed:
+    /// the document the page moved to it for.
+    prefetched: Option<(String, FetchResponse)>,
+}
+
+/// What the host does with a request it checked.
+pub(crate) enum Checked {
+    /// Makes it, with this context.
+    Fetch(RequestContext),
+    /// Answers it with a response it already has.
+    Prefetched(FetchResponse),
 }
 
 impl SiteLock {
@@ -443,6 +838,15 @@ impl SiteLock {
     /// A page's current document and the ones being navigated to.
     const MAX_DOCUMENTS: usize = 4;
     const MAX_OPAQUE: usize = 256;
+
+    /// The lock of a renderer started for the document `response` (fetched
+    /// for `url`): its site, and the one navigation it will make.
+    fn for_document(url: &str, response: FetchResponse) -> SiteLock {
+        let mut lock = SiteLock { site: Some(Site::of_url(&response.final_url)), ..SiteLock::default() };
+        lock.expect_typed(url);
+        lock.prefetched = Some((url.to_string(), response));
+        lock
+    }
 
     /// The host told the page to load `url`.
     pub fn expect_typed(&mut self, url: &str) {
@@ -452,9 +856,7 @@ impl SiteLock {
         self.typed.push_back(url.to_string());
     }
 
-    /// A navigation the host made for this page landed on `final_url`.
-    pub fn document(&mut self, final_url: &str) {
-        let origin = Origin::parse(final_url);
+    fn record(&mut self, origin: Origin) {
         if origin.is_opaque() || self.documents.iter().any(|d| d.same_origin(&origin)) {
             return;
         }
@@ -464,14 +866,50 @@ impl SiteLock {
         self.documents.push_back(origin);
     }
 
-    /// The request context the host will use, or why the request is refused.
-    pub fn check(&mut self, url: &str, ctx: &WireContext) -> Result<RequestContext, &'static str> {
+    /// A navigation landed on `final_url` (after any redirects): whether
+    /// this renderer may hold that document — one of its site, or its first
+    /// (which sets its site). If so its origin is recorded: a page names a
+    /// document by the URL it landed on, never the one it asked for.
+    pub fn admit(&mut self, final_url: &str) -> bool {
+        let landed = Origin::parse(final_url);
+        if landed.is_opaque() {
+            return true; // cross-site to everything: it can claim nothing
+        }
+        let site = landed.site();
+        match &self.site {
+            Some(locked) if *locked != site => return false,
+            Some(_) => {}
+            None => self.site = Some(site.clone()),
+        }
+        self.record(landed);
+        true
+    }
+
+    /// The host gives this renderer an HTML document with address `url`:
+    /// whether it may hold it (as [`Self::admit`]). One without an address
+    /// has an opaque origin and fits anywhere.
+    pub fn admit_html(&mut self, url: Option<&str>) -> bool {
+        url.is_none_or(|url| self.admit(url))
+    }
+
+    /// Whether a document of `origin` was loaded into this renderer.
+    pub fn has_document(&self, origin: &Origin) -> bool {
+        !origin.is_opaque() && self.documents.iter().any(|d| d.same_origin(origin))
+    }
+
+    /// What the host does with the request, or why it is refused.
+    pub fn check(&mut self, url: &str, ctx: &WireContext) -> Result<Checked, &'static str> {
         let Some(initiator) = &ctx.initiator else {
             let expected = self.typed.iter().position(|u| u == url);
             return match (ctx.is_navigation, expected) {
                 (true, Some(i)) => {
                     self.typed.remove(i);
-                    Ok(RequestContext { initiator: None, is_navigation: true, credentials: ctx.credentials, destination: network::Destination::Document })
+                    if self.prefetched.as_ref().is_some_and(|(u, _)| u == url) {
+                        if let Some((_, response)) = self.prefetched.take() {
+                            return Ok(Checked::Prefetched(response));
+                        }
+                    }
+                    Ok(Checked::Fetch(RequestContext { initiator: None, is_navigation: true, credentials: ctx.credentials, destination: network::Destination::Document }))
                 }
                 _ => Err("a browser-initiated request the browser did not make"),
             };
@@ -486,20 +924,22 @@ impl SiteLock {
             None => {
                 let Some(page_url) = &initiator.url else { return Err("a request from a document with no origin") };
                 let origin = Origin::parse(page_url);
-                if origin.is_opaque() || !self.documents.iter().any(|d| d.same_origin(&origin)) {
+                if !self.has_document(&origin) {
                     return Err("a request on behalf of an origin this page never loaded");
                 }
                 origin
             }
         };
-        Ok(RequestContext {
+        Ok(Checked::Fetch(RequestContext {
             initiator: Some(Initiator::document(origin, initiator.url.as_deref())),
             is_navigation: ctx.is_navigation,
             credentials: ctx.credentials,
             // What the renderer says a request is for only narrows what the
-            // filter's type options match; a navigation is a document.
+            // filter's type options match, and what of a cross-origin
+            // response it is given (`response_policy`); a navigation is a
+            // document.
             destination: if ctx.is_navigation { network::Destination::Document } else { ctx.destination },
-        })
+        }))
     }
 }
 
@@ -563,6 +1003,14 @@ mod tests {
         Some(WireInitiator { url: Some(url.to_string()), opaque: None })
     }
 
+    fn fetch_context(checked: Result<Checked, &'static str>) -> RequestContext {
+        match checked {
+            Ok(Checked::Fetch(ctx)) => ctx,
+            Ok(Checked::Prefetched(_)) => panic!("not a prefetched request"),
+            Err(reason) => panic!("refused: {reason}"),
+        }
+    }
+
     /// ADR 016 §5: a compromised renderer cannot borrow another site's
     /// cookies by claiming to be it, nor make typed navigations of its own.
     #[test]
@@ -575,21 +1023,59 @@ mod tests {
         assert!(lock.check("https://news.example/", &ctx(None, true)).is_ok());
         assert!(lock.check("https://news.example/", &ctx(None, true)).is_err(), "only once");
         // Requests from the document it loaded — not from anyone else.
-        lock.document("https://news.example/index.html");
-        let ok = lock.check("https://cdn.example/a.png", &ctx(from("https://news.example/index.html"), false)).unwrap();
+        assert!(lock.admit("https://news.example/index.html"));
+        let ok = fetch_context(lock.check("https://cdn.example/a.png", &ctx(from("https://news.example/index.html"), false)));
         assert!(ok.initiator.unwrap().origin.same_origin(&Origin::parse("https://news.example/")));
         assert!(lock.check("https://bank.example/transfer", &ctx(from("https://bank.example/"), false)).is_err(), "a forged initiator");
         assert!(lock.check("https://x/", &ctx(Some(WireInitiator { url: None, opaque: None }), false)).is_err());
-        // A link to another site is a navigation from this document; once it
-        // lands, the new document's requests are allowed.
-        assert!(lock.check("https://bank.example/", &ctx(from("https://news.example/"), true)).is_ok());
-        lock.document("https://bank.example/");
-        assert!(lock.check("https://bank.example/api", &ctx(from("https://bank.example/"), false)).is_ok());
         // An opaque origin is always allowed, and stays the same origin.
         let opaque = Some(WireInitiator { url: None, opaque: Some(7) });
-        let a = lock.check("https://x/", &ctx(opaque.clone(), false)).unwrap().initiator.unwrap().origin;
-        let b = lock.check("https://y/", &ctx(opaque, false)).unwrap().initiator.unwrap().origin;
+        let a = fetch_context(lock.check("https://x/", &ctx(opaque.clone(), false))).initiator.unwrap().origin;
+        let b = fetch_context(lock.check("https://y/", &ctx(opaque, false))).initiator.unwrap().origin;
         assert!(a.is_opaque() && a.same_origin(&b));
+    }
+
+    /// Milestone 41 (ADR 025 §2): a renderer holds one site's documents. A
+    /// link to another site may be followed — the host makes the request —
+    /// but the document it lands on is not admitted, so the renderer never
+    /// gains that site's authority; another origin of its own site is.
+    #[test]
+    fn a_renderer_is_locked_to_the_site_of_its_first_document() {
+        let mut lock = SiteLock::default();
+        assert!(lock.admit("https://news.example/"));
+        assert!(lock.check("https://bank.example/", &ctx(from("https://news.example/"), true)).is_ok(), "a link may be followed");
+        assert!(!lock.admit("https://bank.example/"), "but its document is another site's");
+        assert!(lock.check("https://bank.example/api", &ctx(from("https://bank.example/"), false)).is_err(), "and the renderer never becomes the bank");
+        assert!(!lock.has_document(&Origin::parse("https://bank.example/")));
+        // Same site, other origin: admitted.
+        assert!(lock.admit("https://www.news.example/"));
+        assert!(lock.has_document(&Origin::parse("https://www.news.example/")));
+        // A URL that redirects off-site lands elsewhere: not admitted.
+        let mut lock = SiteLock::default();
+        assert!(lock.admit("https://a.example/"));
+        assert!(!lock.admit("https://b.example/"));
+        assert!(!lock.has_document(&Origin::parse("https://b.example/")));
+        // A redirect within the site: only where it landed names the document.
+        assert!(lock.admit("https://www.a.example/home"));
+        assert!(lock.has_document(&Origin::parse("https://www.a.example/")));
+        // Sites are schemeful (M28): `http:` is another site.
+        assert!(!lock.admit("http://a.example/"));
+        // Host-given HTML: of the renderer's site, or with no address.
+        assert!(lock.admit_html(None));
+        assert!(lock.admit_html(Some("https://a.example/page")));
+        assert!(!lock.admit_html(Some("https://c.example/")));
+    }
+
+    /// A renderer started for a document the host already fetched is
+    /// answered with it — once, and only for that URL.
+    #[test]
+    fn a_prefetched_document_is_handed_over_once() {
+        let response = FetchResponse { status: 200, final_url: "https://b.example/".into(), headers: vec![], body: b"<html>".to_vec() };
+        let mut lock = SiteLock::for_document("https://b.example/", response);
+        assert!(lock.check("https://c.example/", &ctx(None, true)).is_err(), "not the expected navigation");
+        assert!(matches!(lock.check("https://b.example/", &ctx(None, true)), Ok(Checked::Prefetched(r)) if r.body == b"<html>"));
+        assert!(lock.check("https://b.example/", &ctx(None, true)).is_err(), "only once");
+        assert!(!lock.admit("https://a.example/"), "locked to the document's site from the start");
     }
 
     /// A launcher whose "renderer" is the test itself, on the other ends of
@@ -629,14 +1115,13 @@ mod tests {
         let (mut fake_reads, host_writes) = std::io::pipe().unwrap();
         let connection = RendererConnection { to_renderer: Box::new(host_writes), from_renderer: Box::new(host_reads), control: Box::new(NoControl) };
         let setup = ProcessSetup {
-            launcher: Arc::new(Scripted(Mutex::new(Some(connection)))),
-            spare: None,
+            spares: Spares::new(Arc::new(Scripted(Mutex::new(Some(connection))))),
             network: NetworkContext::new(),
             viewport: Viewport::new(100.0, 100.0),
             image_loading: ImageLoading::Progressive,
             waker: Arc::default(),
             fonts: None,
-            grants: 0,
+            grants: PageGrants::none(),
             fingerprint: privacy::FingerprintPolicy::standard(),
             unresponsive_after: crate::UNRESPONSIVE_AFTER,
         };
@@ -665,6 +1150,174 @@ mod tests {
         }
         std::thread::sleep(Duration::from_millis(100));
         assert_eq!(hits.load(Ordering::SeqCst), 0, "a refused request never reaches the network");
+    }
+
+    /// A local server answering `/doc` with a page and `/secret` with JSON;
+    /// counts the requests for each path.
+    fn counting_server() -> (String, Arc<Mutex<HashMap<String, usize>>>) {
+        use std::io::{BufRead, BufReader};
+        let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+        let port = listener.local_addr().unwrap().port();
+        let hits: Arc<Mutex<HashMap<String, usize>>> = Arc::default();
+        let counted = Arc::clone(&hits);
+        std::thread::spawn(move || {
+            for stream in listener.incoming() {
+                let Ok(mut stream) = stream else { continue };
+                let mut reader = BufReader::new(stream.try_clone().unwrap());
+                let mut line = String::new();
+                let _ = reader.read_line(&mut line);
+                loop {
+                    let mut header = String::new();
+                    if reader.read_line(&mut header).unwrap_or(0) == 0 || header.trim().is_empty() {
+                        break;
+                    }
+                }
+                let path = line.split_whitespace().nth(1).unwrap_or("").to_string();
+                *lock(&counted).entry(path.clone()).or_default() += 1;
+                let (kind, body): (&str, &[u8]) = if path == "/secret" { ("application/json", br#"{"balance": 1000}"#) } else { ("text/html", b"<html><body>doc</body></html>") };
+                let _ = write!(stream, "HTTP/1.1 200 OK\r\nContent-Type: {kind}\r\nContent-Length: {}\r\nConnection: close\r\n\r\n", body.len());
+                let _ = stream.write_all(body);
+            }
+        });
+        (format!("http://127.0.0.1:{port}"), hits)
+    }
+
+    /// The test plays the renderer, on the far ends of the pipes: it gets the
+    /// page's setup, and then whatever it asks the host for.
+    struct FakeRenderer {
+        to_host: std::io::PipeWriter,
+        from_host: std::io::PipeReader,
+    }
+
+    impl FakeRenderer {
+        fn start(grants: PageGrants) -> (FakeRenderer, Arc<Mailbox>, ProcessPage) {
+            let (host_reads, to_host) = std::io::pipe().unwrap();
+            let (from_host, host_writes) = std::io::pipe().unwrap();
+            let connection = RendererConnection { to_renderer: Box::new(host_writes), from_renderer: Box::new(host_reads), control: Box::new(NoControl) };
+            let setup = ProcessSetup {
+                spares: Spares::new(Arc::new(Scripted(Mutex::new(Some(connection))))),
+                network: NetworkContext::new(),
+                viewport: Viewport::new(100.0, 100.0),
+                image_loading: ImageLoading::Progressive,
+                waker: Arc::default(),
+                fonts: None,
+                grants,
+                fingerprint: privacy::FingerprintPolicy::standard(),
+                unresponsive_after: crate::UNRESPONSIVE_AFTER,
+            };
+            let mailbox = Arc::new(Mailbox::default());
+            let page = spawn(PageId(1), Arc::clone(&mailbox), setup).unwrap();
+            let mut fake = FakeRenderer { to_host, from_host };
+            assert!(matches!(fake.next(), ToRenderer::Setup { .. }));
+            (fake, mailbox, page)
+        }
+
+        fn next(&mut self) -> ToRenderer {
+            ToRenderer::decode(&ipc::read_frame(&mut self.from_host).unwrap().unwrap()).unwrap()
+        }
+
+        fn ask(&mut self, message: ToHost) -> ToRenderer {
+            ipc::write_frame(&mut self.to_host, &message.encode()).unwrap();
+            self.next()
+        }
+
+        /// The host has the page load `url`; this renderer makes the
+        /// navigation request, and gets the document.
+        fn load(&mut self, mailbox: &Mailbox, url: &str) {
+            mailbox.post(PageCommand::Load(LoadRequest::Url(url.into())));
+            mailbox.post_tick(Instant::now());
+            assert!(matches!(self.next(), ToRenderer::Command(PageCommand::Load(_))));
+            assert!(matches!(self.next(), ToRenderer::Tick(_)));
+            let navigation = WireContext { initiator: None, is_navigation: true, credentials: Credentials::Include, destination: network::Destination::Document };
+            match self.ask(ToHost::FetchRequest { id: 100, url: url.into(), context: navigation }) {
+                ToRenderer::FetchReply { result: Ok(response), .. } => assert_eq!(response.status, 200),
+                other => panic!("the document was not loaded: {other:?}"),
+            }
+        }
+    }
+
+    fn fetch(fake: &mut FakeRenderer, id: u64, url: &str, from: &str, destination: network::Destination) -> std::result::Result<FetchResponse, NetworkError> {
+        let context = WireContext { initiator: Some(WireInitiator { url: Some(from.into()), opaque: None }), is_navigation: false, credentials: Credentials::Include, destination };
+        match fake.ask(ToHost::FetchRequest { id, url: url.into(), context }) {
+            ToRenderer::FetchReply { id: got, result } => {
+                assert_eq!(got, id);
+                result
+            }
+            other => panic!("{other:?}"),
+        }
+    }
+
+    /// Milestone 41 (ADR 025 §5), the acceptance criterion: a renderer whose
+    /// page holds no network grant cannot have the browser make a script
+    /// request — a credentialed cross-origin `fetch` — however it labels it.
+    /// Asked for as script's, it is refused before the network; called an
+    /// image load, the request is an image request, and its JSON is
+    /// withheld. With the grant, the browser makes it, and still withholds
+    /// what CORS keeps from the document.
+    #[test]
+    fn a_renderer_without_the_network_grant_cannot_get_a_script_request_made() {
+        let (doc_server, _) = counting_server();
+        let (other, hits) = counting_server();
+        let doc = format!("{doc_server}/doc");
+        let secret = format!("{other}/secret");
+        let (mut fake, mailbox, _page) = FakeRenderer::start(PageGrants::none());
+        fake.load(&mailbox, &doc);
+        for (id, destination) in [(1, network::Destination::XmlHttpRequest), (2, network::Destination::Script), (3, network::Destination::Other)] {
+            match fetch(&mut fake, id, &secret, &doc, destination) {
+                Err(NetworkError::Transport(reason)) => assert!(reason.contains("network capability"), "{reason}"),
+                other => panic!("{destination:?} was not refused: {other:?}"),
+            }
+        }
+        assert_eq!(lock(&hits).get("/secret"), None, "nothing reached the network");
+        let withheld = metrics_guard(Guard::RendererResponseWithheld);
+        let as_image = fetch(&mut fake, 4, &secret, &doc, network::Destination::Image).unwrap();
+        assert!(as_image.body.is_empty() && as_image.headers.is_empty(), "an image request gets no JSON");
+        assert_eq!(lock(&hits).get("/secret"), Some(&1));
+        assert!(metrics_guard(Guard::RendererResponseWithheld) > withheld);
+
+        // Granted: made, and still only what CORS allows the document.
+        let authority = capability::Authority::new();
+        let grants = PageGrants { network: Some(authority.network(NetworkContext::new())), storage: None };
+        let (mut fake, mailbox, _page) = FakeRenderer::start(grants);
+        fake.load(&mailbox, &doc);
+        let response = fetch(&mut fake, 5, &secret, &doc, network::Destination::XmlHttpRequest).unwrap();
+        assert!(response.body.is_empty(), "no Access-Control-Allow-Origin: withheld");
+        assert_eq!(lock(&hits).get("/secret"), Some(&2));
+        let own = fetch(&mut fake, 6, &format!("{doc_server}/secret"), &doc, network::Destination::XmlHttpRequest).unwrap();
+        assert!(!own.body.is_empty(), "the document's own origin: whole");
+    }
+
+    /// ADR 025 §4: a renderer's storage requests are served from the page's
+    /// own grant, only for an origin it loaded — and a revocation is
+    /// enforced by the browser at once.
+    #[test]
+    fn storage_is_served_by_the_browser_only_for_origins_the_renderer_loaded() {
+        let (doc_server, _) = counting_server();
+        let doc = format!("{doc_server}/doc");
+        let store = storage::StorageStore::new();
+        let authority = capability::Authority::new();
+        let grants = PageGrants { network: None, storage: Some(authority.storage(store.clone())) };
+        let (mut fake, mailbox, _page) = FakeRenderer::start(grants.clone());
+        let origin = Origin::parse(&doc).serialize();
+        let ask = |fake: &mut FakeRenderer, id: u64, origin: &str, op: StorageOp| match fake.ask(ToHost::Storage { id, origin: origin.into(), op }) {
+            ToRenderer::StorageReply { id: got, answer } if got == id => answer,
+            other => panic!("{other:?}"),
+        };
+        assert_eq!(ask(&mut fake, 1, &origin, StorageOp::Set("k".into(), "v".into())), StorageAnswer::Refused, "no document of that origin yet");
+        fake.load(&mailbox, &doc);
+        assert_eq!(ask(&mut fake, 2, &origin, StorageOp::Set("k".into(), "v".into())), StorageAnswer::Written(true));
+        assert_eq!(store.area_for(&StorageKey::first_party(&Origin::parse(&doc))).get("k").as_deref(), Some("v"), "in the profile's store");
+        assert_eq!(ask(&mut fake, 3, &origin, StorageOp::Get("k".into())), StorageAnswer::Value(Some("v".into())));
+        assert_eq!(ask(&mut fake, 4, &origin, StorageOp::Length), StorageAnswer::Length(1));
+        assert_eq!(ask(&mut fake, 5, "https://bank.example", StorageOp::Get("k".into())), StorageAnswer::Refused, "another site's storage");
+        assert_eq!(ask(&mut fake, 6, "https://bank.example/", StorageOp::Get("k".into())), StorageAnswer::Refused, "not a serialised origin");
+        assert_eq!(ask(&mut fake, 7, &"x".repeat(100), StorageOp::Clear), StorageAnswer::Refused);
+        grants.revoke(capability::CapabilityKind::Storage);
+        assert_eq!(ask(&mut fake, 8, &origin, StorageOp::Get("k".into())), StorageAnswer::Refused, "revoked: refused by the browser");
+    }
+
+    fn metrics_guard(guard: Guard) -> u64 {
+        diagnostics::metrics::guard_hits(guard)
     }
 
     #[test]

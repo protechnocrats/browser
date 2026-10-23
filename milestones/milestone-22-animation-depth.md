@@ -186,7 +186,11 @@ dependency is satisfied before work starts, not worked around.
   such animations, they are captured at idle, and text in one box on each
   has different glyph widths; what changed it during those frames is not
   identified (backlog).)*
-- **`@keyframes` scope cut, stated plainly** (Milestone 22): `KeyframesRule` only
+- *(Superseded in part: the first-and-last-stop limit and the missing
+  `animation-timing-function` below were closed in the gap pass — see the
+  note above. The implicit `forwards` fill and the single-valued
+  `animation-name` still hold.)*
+  **`@keyframes` scope cut, stated plainly** (Milestone 22): `KeyframesRule` only
   keeps the FIRST and LAST parsed stop (`from`/`0%` and `to`/`100%`);
   any middle stops (`0% {} 50% {} 100% {}`) are parsed (so malformed
   input doesn't panic) but discarded — `apply_animations` only ever
@@ -208,7 +212,8 @@ dependency is satisfied before work starts, not worked around.
   unused> <infinite|N>` in any order (space-separated token
   classification, same pragmatic style `transition`'s shorthand
   parser already uses).
-- **`rgb()`/`rgba()` color syntax still isn't supported anywhere in
+- *(Closed in Milestone 33, step 2: `rgb()`/`rgba()`/`hsl()`/`hsla()` parse.)*
+  **`rgb()`/`rgba()` color syntax still isn't supported anywhere in
   this codebase** (`Color::parse` only understands `#hex` and named
   keywords) — discovered while writing this milestone's tests (an
   early draft used `rgb(100,0,0)` and silently failed to parse,
@@ -254,7 +259,7 @@ dependency is satisfied before work starts, not worked around.
   (deliberately NOT a `:hover`-triggered demo — `:hover` is still
   always-`false` in this engine's cascade, see
   `PseudoClass::Interactive`'s match arm in `style`, a pre-existing gap
-  this milestone didn't touch) — confirmed rendering with correct
+  this milestone didn't touch; *`:hover` matches since the gap pass*) — confirmed rendering with correct
   initial layout/colors on real hardware (AMD Radeon 780M, Wayland/KDE)
   and confirmed animating via direct data instrumentation, though final
   on-screen visual reconfirmation was inconclusive this pass (see the

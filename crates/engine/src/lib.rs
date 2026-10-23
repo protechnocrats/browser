@@ -36,6 +36,7 @@ mod page_thread;
 mod webfonts;
 mod process;
 mod renderer;
+mod response_policy;
 
 pub use ipc::fuzz_decode as fuzz_decode_ipc_message;
 pub use loader::ImageLoading;
@@ -317,8 +318,9 @@ pub enum EngineEvent {
     /// per page.
     Frame { page: PageId, scene: Scene, stats: FrameStats },
     NavigationStarted { page: PageId, url: String },
-    /// A new document is now the page's document. `url` is `None` for an
-    /// HTML string loaded without an address.
+    /// A new document is now the page's document. `url` is its address —
+    /// for a fetched document, the URL it landed on after any redirects —
+    /// or `None` for an HTML string loaded without one.
     NavigationCommitted { page: PageId, url: Option<String> },
     /// The navigation did not produce a document; the old one stays.
     NavigationFailed { page: PageId, url: String, error: String },
@@ -353,10 +355,10 @@ pub struct Engine {
     waker: WakerSlot,
     image_loading: ImageLoading,
     isolation: Isolation,
-    /// Process mode: a renderer started ahead of need, so a new page does
-    /// not wait for a process to start (and parse its font) — the next
-    /// page takes it and another is started behind it.
-    spare_renderer: Option<RendererConnection>,
+    /// Process mode: renderers started ahead of need, so a new page — or a
+    /// page moving to a renderer for another site (Milestone 41) — does not
+    /// wait for a process to start (and parse its font).
+    spares: Option<Arc<process::Spares>>,
     unresponsive_after: Duration,
     pages: BTreeMap<PageId, PageHandle>,
     next_page: u64,
@@ -371,8 +373,8 @@ impl Engine {
         // on Linux, inherit its name — every worker showed up as `page-1`.
         // Fails harmlessly if the pool already exists (a second engine).
         let _ = rayon::ThreadPoolBuilder::new().thread_name(|i| format!("worker-{i}")).build_global();
-        let spare_renderer = match &config.isolation {
-            Isolation::Processes(launcher) => launcher.launch().ok(),
+        let spares = match &config.isolation {
+            Isolation::Processes(launcher) => Some(process::Spares::new(Arc::clone(launcher))),
             Isolation::Threads => None,
         };
         Engine {
@@ -381,7 +383,7 @@ impl Engine {
             waker: Arc::new(Mutex::new(config.waker)),
             image_loading: config.image_loading,
             isolation: config.isolation,
-            spare_renderer,
+            spares,
             unresponsive_after: UNRESPONSIVE_AFTER,
             pages: BTreeMap::new(),
             next_page: 1,
@@ -425,24 +427,23 @@ impl Engine {
                 }
             }
             Isolation::Processes(launcher) => {
+                let spares = Arc::clone(self.spares.get_or_insert_with(|| process::Spares::new(Arc::clone(launcher))));
                 let setup = process::ProcessSetup {
-                    launcher: Arc::clone(launcher),
-                    spare: self.spare_renderer.take(),
+                    spares,
                     network: self.network.clone(),
                     viewport: params.viewport.sanitized(),
                     image_loading: self.image_loading,
                     waker: Arc::clone(&self.waker),
                     fonts: fonts_for(&self.fonts, params.fingerprint),
-                    grants: params.grants.bits(),
+                    grants: params.grants.clone(),
                     fingerprint: params.fingerprint,
                     unresponsive_after: self.unresponsive_after,
                 };
+                // The renderer is the spare (the next one starts behind it).
                 match process::spawn(id, Arc::clone(&mailbox), setup) {
                     Ok(page) => process = Some(page),
                     Err(e) => mailbox.mark_crashed(format!("could not start the page's renderer process: {e}")),
                 }
-                // The next page's renderer starts now, off its critical path.
-                self.spare_renderer = launcher.launch().ok();
             }
         }
         // Due immediately: the first tick draws the (blank) first frame.
@@ -468,6 +469,14 @@ impl Engine {
     /// The operating-system process id of `page`'s renderer (process mode).
     pub fn renderer_pid(&self, page: PageId) -> Option<u32> {
         self.pages.get(&page)?.process.as_ref()?.pid()
+    }
+
+    /// A number identifying `page`'s current renderer (process mode): the
+    /// page gets a new one when it moves to a renderer for another site
+    /// (Milestone 41, ADR 025) — a same-site navigation keeps it. Diagnostics
+    /// and tests; meaningful only within this process.
+    pub fn renderer_serial(&self, page: PageId) -> Option<u64> {
+        self.pages.get(&page)?.process.as_ref()?.serial()
     }
 
     /// Whether `page`'s renderer reported running sandboxed, and how
@@ -619,8 +628,8 @@ impl Drop for Engine {
     /// Every page thread is told to finish (not waited for); an unused
     /// spare renderer is ended.
     fn drop(&mut self) {
-        if let Some(mut spare) = self.spare_renderer.take() {
-            spare.control.terminate();
+        if let Some(spares) = &self.spares {
+            spares.close();
         }
         for handle in self.pages.values() {
             handle.mailbox.shutdown();

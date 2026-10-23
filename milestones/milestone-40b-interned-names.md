@@ -12,7 +12,7 @@
 
 **Goal:** names compared as integers where they are compared most (ADR 021
 §5), measured as a gain — after M39 measured interning *after* parsing as a
-loss (first frames +7%, clicks +60%, branch `m39-atoms-measured`).
+loss (first frames +7%, clicks +60%).
 
 ## What was built
 
@@ -95,7 +95,7 @@ failures.
 
 ## Measurements
 
-Interleaved runs of M40 (`f50eb04`) and M40b, binaries built from each; load
+Interleaved runs of M40 and M40b, binaries built from each; load
 average 3–7 throughout.
 
 `frame_bench`, 40 rounds (median of medians; best in brackets):

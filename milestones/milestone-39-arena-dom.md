@@ -3,7 +3,7 @@
 > **Status:** Done, with gaps (2026-10-20). **Still open:** interned names
 > were built, measured as a net loss here, and deferred to **M40**, then
 > **M40b** (ADR 021
-> §5; branch `m39-atoms-measured`) — done there, interned where names are
+> §5) — done there, interned where names are
 > born (ADR 024); layout boxes relative to their parent
 > (architecture review A5) and display lists rebuilt only in part on a
 > layout change → **M39b** (done there, ADR 022); one-DOM-change frames on
@@ -22,7 +22,7 @@ mutation API; one copy of the rules that were duplicated across crates.
 In four steps, each behind the M31 restyle and layout oracles and the 56
 corpus goldens, which never moved.
 
-1. **Every reader goes through `dom::ElementRef`** (`17e69b5`). A `Copy`
+1. **Every reader goes through `dom::ElementRef`**. A `Copy`
    handle to an element wherever it lives — an owned `Element` (a fragment)
    or a document's arena — with `tag()`, `attr()`, `children()` (yielding
    `ChildRef::Element` or `ChildRef::Text`), `element_children()`,
@@ -30,7 +30,7 @@ corpus goldens, which never moved.
    and `engine` were moved onto it with storage unchanged; `Document` stopped
    dereferencing to its root `Element`. Public entry points take
    `impl Into<ElementRef>`, so owned test trees pass unchanged.
-2. **The document is an arena** (`cb6da3f`). One `Vec` of node slots, each
+2. **The document is an arena**. One `Vec` of node slots, each
    with its parent, first and last child, previous and next sibling as `u32`
    links (a sentinel for none), a child count, and its data (element, text,
    or a free slot). Traversal follows links; `NodeId → slot` (a
@@ -38,7 +38,7 @@ corpus goldens, which never moved.
    index answer lookups. Freed slots are reused; ids never are. `Element`
    stays the fragment type: `Document::new` and the insertion methods move
    fragments in, keeping element ids; text nodes get ids in the document.
-3. **The full mutation API** (`cad00ae`). `insert_before`, `move_before`
+3. **The full mutation API**. `insert_before`, `move_before`
    (relinks an attached node; refuses cycles and the root), `remove_child`
    (a fragment keeping its ids), `replace_child`, `clone_node` (fresh ids),
    `Fragment::text`. Each is O(1) link updates, counted
@@ -47,7 +47,7 @@ corpus goldens, which never moved.
    `removeChild`, `replaceChild`, `cloneNode`, `document.createTextNode`;
    `appendChild` moves an attached node; a removed node comes back as a
    detached handle with the same id.
-4. **One rule, once** (`e8f1600`). Form-field validity
+4. **One rule, once**. Form-field validity
    (`ElementRef::is_valid`: `required`, `pattern` via the linear-time
    matcher) replaces three copies — `style`'s `:valid`/`:invalid`, `js`'s
    submission gate, `accessibility`'s `invalid` (which now also sees
@@ -142,8 +142,8 @@ cost was the hit test, which M39b prunes to 5 boxes.)*
 
 ## Not done / open
 
-- **Interned names** → M40, split to **M40b** (ADR 021 §5): built and measured on branch
-  `m39-atoms-measured`; they pay only when interned in the parser and used
+- **Interned names** → M40, split to **M40b** (ADR 021 §5): built and measured in M39 (ADR 021 §5);
+  they pay only when interned in the parser and used
   by selector matching.
 - **Layout boxes relative to their parent (A5), `LayoutReuse`'s positions
   relative, and display lists rebuilt in part on a layout change → M39b.**

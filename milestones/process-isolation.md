@@ -1,8 +1,8 @@
 # Process isolation — every page in a sandboxed renderer process
 
-> **Status:** Done (2026-09-27). **Still open:** a process per *site*, storage
-> served by the browser process, and sandboxes beyond Linux → **M41**; a GPU
-> process → `ROADMAP.md` §4. Decision record: `docs/adr/016-renderer-processes.md`.
+> **Status:** Done (2026-09-27). **Still open:** ~~a process per *site*, storage
+> served by the browser process~~ — done in **M41** (ADR 025); sandboxes
+> beyond Linux (moved from M41) and a GPU process → `ROADMAP.md` §4. Decision record: `docs/adr/016-renderer-processes.md`.
 > Overall status: `AUDIT.md` · the plan: `ROADMAP.md`.
 
 **Goal:** architecture review finding A1 (`ROADMAP.md` §3): every page ran in

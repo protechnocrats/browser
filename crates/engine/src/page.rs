@@ -87,13 +87,10 @@ pub struct Page {
     /// Milestone 21: an in-flight page navigation, if one was
     /// triggered (`<a href>` click or a GET `<form>` submit) and
     /// hasn't resolved yet — polled once per tick. The `String`
-    /// alongside the handle is the URL that was actually requested —
-    /// kept so a successful navigation can update `current_url`
-    /// (needed to resolve the NEXT relative link/action) without
-    /// `fetch_page`/`NavigationResult` having to report the
-    /// post-redirect URL back out. A real, narrow simplification: if
-    /// the target redirects cross-path, `current_url` reflects the
-    /// pre-redirect URL, not the post-redirect one.
+    /// alongside the handle is the URL that was requested, which a
+    /// failure is reported against; a success reports the URL the
+    /// document landed on (`NavigationResult`), which becomes
+    /// `current_url` and names the document's origin.
     pub pending_nav: Rc<RefCell<Option<(String, NavigationHandle)>>>,
     /// Milestone 26: the profile's shared network context — one cookie
     /// jar and HTTP cache for this page's load, its JS `fetch()`/XHR,
@@ -354,7 +351,7 @@ impl Page {
         new_stylesheet: css_parser::Stylesheet,
         new_image_cache: images::ImageCache,
         pending_images: Vec<PendingImage>,
-        requested_url: Option<String>,
+        document_url: Option<String>,
     ) -> Result<(), ()> {
         if find_body((&new_root).into()).is_none() {
             return Err(());
@@ -385,12 +382,12 @@ impl Page {
         self.sheet_generation.set(self.sheet_generation.get() + 1);
         *self.last_frame.borrow_mut() = None;
         *self.layout_reuse.borrow_mut() = layout::LayoutReuse::new();
-        *self.current_url.borrow_mut() = requested_url.clone();
+        *self.current_url.borrow_mut() = document_url.clone();
         // Milestone 35: the new document's web fonts. Before its first
         // frame when images are waited for too (deterministic loads).
         self.document_generation.set(self.document_generation.get() + 1);
         self.ready_fonts.borrow_mut().clear();
-        let loads = crate::webfonts::start(&self.stylesheet.borrow(), requested_url.as_deref(), &self.network);
+        let loads = crate::webfonts::start(&self.stylesheet.borrow(), document_url.as_deref(), &self.network);
         if self.image_loading.get() == ImageLoading::BeforeFirstFrame {
             // Inside a tick: kept well under the unresponsive bound (ADR 013).
             *self.ready_fonts.borrow_mut() = crate::webfonts::wait(loads, std::time::Instant::now() + IN_TICK_FONT_WAIT);
@@ -403,7 +400,7 @@ impl Page {
         // now gone. Built on the SAME `document` Rc, which now holds
         // the NEW page's body — every closure holding that Rc sees the
         // swap for free.
-        *self.js_env.borrow_mut() = script_environment(&self.document, page_identity(requested_url.as_deref()), &self.grants, self.fingerprint, &self.network);
+        *self.js_env.borrow_mut() = script_environment(&self.document, page_identity(document_url.as_deref()), &self.grants, self.fingerprint, &self.network);
         // The old page's script objects are garbage now: free them.
         js::collect_garbage();
         run_scripts(&self.document, &mut self.js_env.borrow_mut());
@@ -659,7 +656,7 @@ mod tests {
             }
         });
         let mut cache = images::ImageCache::new();
-        let (_, _, pending) = fetch_page_progressive(&format!("{base}/p.html"), &mut cache, &network::NetworkContext::new(), None).unwrap();
+        let (_, _, pending, _) = fetch_page_progressive(&format!("{base}/p.html"), &mut cache, &network::NetworkContext::new(), None).unwrap();
         assert_eq!(pending.len(), 4);
         assert!(pending.iter().all(|p| cache.is_pending(&p.url)), "in flight: never looked for on disk");
         let started = Instant::now();
@@ -715,7 +712,7 @@ mod tests {
         // the time we get here.
         assert!(start.elapsed() < Duration::from_millis(50), "navigate_async must return immediately, not block on the fetch");
 
-        let (root, _stylesheet, _cache, _) = poll_until_settled_navigation(&handle).expect("navigation should complete").expect("page should load");
+        let (root, _stylesheet, _cache, _, _) = poll_until_settled_navigation(&handle).expect("navigation should complete").expect("page should load");
         assert_eq!(root.find_by_id("h").map(|el| el.text_content()), Some("navigated page".to_string()));
     }
 
@@ -813,7 +810,7 @@ mod tests {
         let resolved = network::resolve_url(&format!("{base}/"), &target).expect("action should resolve against the page's base URL");
 
         let handle = navigate_async(&resolved, network::NetworkContext::new(), None);
-        let (new_root, _stylesheet, _cache, _) =
+        let (new_root, _stylesheet, _cache, _, _) =
             poll_until_settled_navigation(&handle).expect("navigation should complete").expect("the server's real response should load correctly");
         assert_eq!(
             new_root.find_by_id("result").map(|el| el.text_content()),
@@ -1286,7 +1283,7 @@ mod tests {
     fn navigation_builds_content_driven_caches_with_no_file_access() {
         let base = spawn_server(|_| (200, vec![], b"<html><body><p>x</p></body></html>".to_vec()));
         let handle = navigate_async(&format!("{base}/"), network::NetworkContext::new(), None);
-        let (_, _, cache, _) = poll_until_settled_navigation(&handle).unwrap().unwrap();
+        let (_, _, cache, _, _) = poll_until_settled_navigation(&handle).unwrap().unwrap();
         assert_eq!(cache.file_access(), images::FileAccess::Denied);
     }
 
@@ -1387,12 +1384,12 @@ mod tests {
         page.js_env.borrow_mut().run_script("localStorage.setItem('theme', 'dark')").unwrap();
 
         // Navigate within the same origin: the new page (fresh JS environment) still has it.
-        let (root2, sheet2, cache2, _) = poll_until_settled_navigation(&navigate_async(&format!("{base}/two"), network.clone(), None)).unwrap().unwrap();
+        let (root2, sheet2, cache2, _, _) = poll_until_settled_navigation(&navigate_async(&format!("{base}/two"), network.clone(), None)).unwrap().unwrap();
         page.replace_with_navigation(root2, sheet2, cache2, Vec::new(), Some(format!("{base}/two"))).unwrap();
         assert_eq!(page.js_env.borrow_mut().run_script("localStorage.getItem('theme')").unwrap(), "dark");
 
         // Navigate to a different origin: it does not.
-        let (root3, sheet3, cache3, _) = poll_until_settled_navigation(&navigate_async(&format!("{other}/three"), network.clone(), None)).unwrap().unwrap();
+        let (root3, sheet3, cache3, _, _) = poll_until_settled_navigation(&navigate_async(&format!("{other}/three"), network.clone(), None)).unwrap().unwrap();
         page.replace_with_navigation(root3, sheet3, cache3, Vec::new(), Some(format!("{other}/three"))).unwrap();
         assert_eq!(page.js_env.borrow_mut().run_script("localStorage.getItem('theme')").unwrap(), "null");
     }

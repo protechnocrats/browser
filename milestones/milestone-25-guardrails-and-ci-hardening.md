@@ -1,6 +1,6 @@
 # Milestone 25 — Guardrails & CI hardening
 
-> **Status:** Done, with gaps. **Still open:** the libFuzzer jobs and CI workflows are written but have never run (no `g++` locally, no CI run yet). ~~Two `cargo audit` exceptions for Boa 0.17 expire 2026-12-31~~ — removed by the Boa 0.22 upgrade (M38a).
+> **Status:** Done, with gaps. **Still open:** the libFuzzer jobs and CI workflows are written; no run observed: the repository has a GitHub remote (`origin`), but its Actions history was not checked, and libFuzzer needs `g++`, absent locally. ~~Two `cargo audit` exceptions for Boa 0.17 expire 2026-12-31~~ — removed by the Boa 0.22 upgrade (M38a).
 > Overall status: `AUDIT.md` · the plan: `ROADMAP.md`.
 
 **Goal:** make the discipline that already existed non-optional, cover the

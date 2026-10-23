@@ -7,7 +7,7 @@
 //! (see [`FrameSender`]) — and carries the page's network requests to the
 //! host through [`IpcRoute`]: the renderer makes no connections of its own.
 
-use crate::ipc::{self, ToHost, ToRenderer, WireContext, WireFrame, WireInitiator};
+use crate::ipc::{self, StorageAnswer, StorageOp, ToHost, ToRenderer, WireContext, WireFrame, WireInitiator};
 use crate::page_thread::{self, Mailbox, PageSetup};
 use crate::{PageCommand, PageId, Scene};
 use network::{FetchResponse, NetworkContext, NetworkError, NetworkRoute, RequestContext};
@@ -81,12 +81,15 @@ pub fn run_renderer(mut input: impl Read, output: impl Write + Send + 'static, s
     });
     // ADR 010 §2: the grants the host listed, re-created on this side of
     // the boundary — the network capability over the IPC route, storage over
-    // this process's own store (memory only until M41 serves storage from
-    // the browser process). Nothing the host did not list.
+    // a store whose areas the browser process keeps (Milestone 41, ADR 025
+    // §4: it checks every operation against the page's grant, and pages of
+    // one origin share it). Nothing the host did not list.
     // A grant made later (`ToRenderer::Grant`) is minted the same way, over
     // the same route and store.
     let authority = capability::Authority::new();
-    let store = storage::StorageStore::new();
+    let pending_storage: PendingStorage = Arc::default();
+    let remote = IpcStorage { out: Arc::clone(&out), pending: Arc::clone(&pending_storage), next_id: AtomicU64::new(1) };
+    let store = storage::StorageStore::remote(Arc::new(remote));
     let mint = {
         let network = network.clone();
         move |bits: u8| {
@@ -186,6 +189,11 @@ pub fn run_renderer(mut input: impl Read, output: impl Write + Send + 'static, s
                     let _ = reply.send(bytes);
                 }
             }
+            ToRenderer::StorageReply { id, answer } => {
+                if let Some(reply) = pending_storage.lock().unwrap_or_else(PoisonError::into_inner).remove(&id) {
+                    let _ = reply.send(answer);
+                }
+            }
             ToRenderer::Shutdown => break 0,
             ToRenderer::Setup { .. } => break 5,
         }
@@ -194,6 +202,7 @@ pub fn run_renderer(mut input: impl Read, output: impl Write + Send + 'static, s
     // Unblock every request still waiting for the host.
     pending.lock().unwrap_or_else(PoisonError::into_inner).clear();
     pending_fonts.lock().unwrap_or_else(PoisonError::into_inner).clear();
+    pending_storage.lock().unwrap_or_else(PoisonError::into_inner).clear();
     code
 }
 
@@ -306,6 +315,70 @@ impl text::FontSource for IpcFonts {
         let bytes = answer.recv_timeout(FONT_WAIT).ok().flatten();
         self.pending.lock().unwrap_or_else(PoisonError::into_inner).remove(&id);
         bytes
+    }
+}
+
+type PendingStorage = Arc<Mutex<HashMap<u64, Sender<StorageAnswer>>>>;
+
+/// How long a storage operation waits for the browser. `localStorage` is
+/// synchronous, so the page thread waits inside a tick: well under the
+/// unresponsive bound (ADR 013), as for fonts.
+const STORAGE_WAIT: Duration = Duration::from_secs(3);
+
+/// Milestone 41 (ADR 025 §4): `localStorage` kept by the browser process.
+/// Every operation is a request it checks and answers; one it does not
+/// answer reads as empty and refuses writes.
+struct IpcStorage {
+    out: SharedWriter,
+    pending: PendingStorage,
+    next_id: AtomicU64,
+}
+
+impl IpcStorage {
+    fn ask(&self, key: &origin::StorageKey, op: StorageOp) -> StorageAnswer {
+        // First-party areas only: no frames exist, so no other kind can be
+        // asked for honestly.
+        if key.top_level_site != key.origin.site() {
+            return StorageAnswer::Refused;
+        }
+        let id = self.next_id.fetch_add(1, Ordering::Relaxed);
+        let (reply, answer) = mpsc::channel();
+        self.pending.lock().unwrap_or_else(PoisonError::into_inner).insert(id, reply);
+        let sent = send(&self.out, &ToHost::Storage { id, origin: key.origin.serialize(), op });
+        let answer = if sent { answer.recv_timeout(STORAGE_WAIT).unwrap_or(StorageAnswer::Refused) } else { StorageAnswer::Refused };
+        self.pending.lock().unwrap_or_else(PoisonError::into_inner).remove(&id);
+        answer
+    }
+}
+
+impl storage::RemoteAreas for IpcStorage {
+    fn get(&self, key: &origin::StorageKey, name: &str) -> Option<String> {
+        match self.ask(key, StorageOp::Get(name.to_string())) {
+            StorageAnswer::Value(v) => v,
+            _ => None,
+        }
+    }
+
+    fn set(&self, key: &origin::StorageKey, name: String, value: String) -> Result<(), storage::QuotaExceeded> {
+        match self.ask(key, StorageOp::Set(name, value)) {
+            StorageAnswer::Written(true) => Ok(()),
+            _ => Err(storage::QuotaExceeded),
+        }
+    }
+
+    fn remove(&self, key: &origin::StorageKey, name: &str) {
+        self.ask(key, StorageOp::Remove(name.to_string()));
+    }
+
+    fn clear(&self, key: &origin::StorageKey) {
+        self.ask(key, StorageOp::Clear);
+    }
+
+    fn len(&self, key: &origin::StorageKey) -> usize {
+        match self.ask(key, StorageOp::Length) {
+            StorageAnswer::Length(n) => n as usize,
+            _ => 0,
+        }
     }
 }
 

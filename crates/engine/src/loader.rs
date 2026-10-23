@@ -61,7 +61,7 @@ pub fn fetch_page(
     network: &network::NetworkContext,
     initiator: Option<&network::Initiator>,
 ) -> Result<(dom::Element, css_parser::Stylesheet), String> {
-    let (root, stylesheet, pending) = fetch_page_progressive(url, image_cache, network, initiator)?;
+    let (root, stylesheet, pending, _) = fetch_page_progressive(url, image_cache, network, initiator)?;
     wait_for_images(pending, image_cache);
     Ok((root, stylesheet))
 }
@@ -99,13 +99,15 @@ pub const SUBRESOURCE_DEADLINE: Duration = Duration::from_secs(10);
 
 /// [`fetch_page`], up to the images: returns once the document and its
 /// stylesheets (which block rendering) have loaded, with the page's image
-/// requests in flight. Images already in `image_cache` are not requested.
+/// requests in flight, and the URL the document came from — the one it
+/// landed on after any redirects, which is its address and names its
+/// origin. Images already in `image_cache` are not requested.
 pub fn fetch_page_progressive(
     url: &str,
     image_cache: &mut images::ImageCache,
     network: &network::NetworkContext,
     initiator: Option<&network::Initiator>,
-) -> Result<(dom::Element, css_parser::Stylesheet, Vec<PendingImage>), String> {
+) -> Result<(dom::Element, css_parser::Stylesheet, Vec<PendingImage>, String), String> {
     use network::RequestContext;
 
     let document_context = match initiator {
@@ -189,7 +191,7 @@ pub fn fetch_page_progressive(
         })
         .collect();
 
-    Ok((root, stylesheet, pending))
+    Ok((root, stylesheet, pending, base_url))
 }
 
 /// Waits (until [`SUBRESOURCE_DEADLINE`], for all of them together) for
@@ -295,9 +297,10 @@ fn decode_into(arrived: Vec<(String, Option<Vec<u8>>)>, cache: &mut images::Imag
 /// the caller's old one — the old page's images are irrelevant to the
 /// new page and keeping them around would only leak memory across
 /// navigations).
-/// The new document, its stylesheet and image cache, and (with
-/// [`ImageLoading::Progressive`]) the image requests still in flight.
-pub type NavigationResult = Result<(dom::Element, css_parser::Stylesheet, images::ImageCache, Vec<PendingImage>), String>;
+/// The new document, its stylesheet and image cache, (with
+/// [`ImageLoading::Progressive`]) the image requests still in flight, and
+/// its URL — where it landed after any redirects.
+pub type NavigationResult = Result<(dom::Element, css_parser::Stylesheet, images::ImageCache, Vec<PendingImage>, String), String>;
 
 /// Milestone 21: the receiving half of a background page navigation —
 /// mirrors `network::FetchHandle`'s exact shape/contract (never
@@ -348,7 +351,7 @@ pub fn navigate_async_with(
     tracing::info!(target: "engine::navigation", url = %network::loggable_url(&url), "navigation started");
     std::thread::spawn(move || {
         let mut image_cache = images::ImageCache::new();
-        let result = fetch_page_progressive(&url, &mut image_cache, &network, initiator.as_ref()).map(|(root, sheet, pending)| {
+        let result = fetch_page_progressive(&url, &mut image_cache, &network, initiator.as_ref()).map(|(root, sheet, pending, landed)| {
             let pending = match loading {
                 ImageLoading::Progressive => pending,
                 ImageLoading::BeforeFirstFrame => {
@@ -356,7 +359,7 @@ pub fn navigate_async_with(
                     Vec::new()
                 }
             };
-            (root, sheet, image_cache, pending)
+            (root, sheet, image_cache, pending, landed)
         });
         match &result {
             Ok(_) => {
