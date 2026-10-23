@@ -31,6 +31,7 @@ yanked = "deny"
 ignore = [
     { id = "RUSTSEC-2024-0436", reason = "paste is unmaintained (proc-macro, build-time only, via wgpu's metal backend dependency). No runtime code. Replace when its dependents move off it." },
     { id = "RUSTSEC-2026-0192", reason = "ttf-parser 0.25 is unmaintained. Since M35 it is the engine's parser for untrusted fonts, web fonts included (`text`, and through `rustybuzz`; ADR 009), and it also reaches winit's title-bar font through sctk-adwaita/ab_glyph. Accepted because it has no `unsafe`, parses lazily and bounds composite depth, and is covered by the `font_parse` and `web_font` fuzz targets and the hostile-font tests; web-font bytes are sniffed, size-capped and validated before it sees them. Replacing it (it sits under rustybuzz) is a risk tracked in ROADMAP.md section 7." },
+    { id = "RUSTSEC-2026-0206", reason = "rustybuzz 0.20 is unmaintained. It is the engine's shaper (ADR 009) and sits on ttf-parser (RUSTSEC-2026-0192 above), so it is accepted on the same grounds: its only `unsafe` is bytemuck Pod/Zeroable marker impls on plain-data structs (no unsafe blocks or fns), it is fed only fonts that ttf-parser has already parsed, and covered by the `font_parse` and `web_font` fuzz targets. It is replaced together with ttf-parser, per the risk in ROADMAP.md section 7." },
 ]
 
 # ---------------------------------------------------------------------
