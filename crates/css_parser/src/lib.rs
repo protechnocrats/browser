@@ -705,12 +705,12 @@ fn read_block(chars: &mut std::iter::Peekable<std::str::Chars>) -> (String, bool
 /// multiplies): past it the nested rule is dropped.
 const MAX_NESTED_SELECTORS: usize = 256;
 
-/// Most text one nested rule's selector list may expand to. The count
-/// above is not enough: a selector with an unclosed `(` hides the commas
-/// after it from `split_top_level`, so `P c1, P c2, …` counts as ONE parent
-/// at the next level while its text still multiplies by every level's child
-/// count — and each `&` in a child is another copy of the parent (found by
-/// the `parse_stylesheet` fuzz target: 5 KB of CSS expanded to ~800 MB).
+/// Most text one nested rule's selector list may expand to. Each `&` in a
+/// child is another copy of the parent, so the count above does not bound
+/// the text. (The `parse_stylesheet` fuzz target found 5 KB of CSS that
+/// expanded to ~800 MB: an unclosed `(` in a parent hid the commas after
+/// it from the count. Invalid selectors are no longer passed down, so that
+/// input is stopped at its first level; this cap bounds what is left.)
 const MAX_NESTED_SELECTOR_BYTES: usize = 64 * 1024;
 
 /// One style rule: its own declarations, then its nested rules (CSS
@@ -796,12 +796,15 @@ fn split_nested_rules(body: &str) -> (String, Vec<(String, String)>) {
 
 /// The selector list of a nested rule, written out in full against its
 /// parent's (`None` when there is nothing to match or it would expand
-/// past [`MAX_NESTED_SELECTORS`] or [`MAX_NESTED_SELECTOR_BYTES`]).
+/// past [`MAX_NESTED_SELECTORS`] or [`MAX_NESTED_SELECTOR_BYTES`]). Only
+/// combinations that parse are kept: one that does not matches nothing,
+/// nor does anything nested under it, and its text must not reach the next
+/// level, where an unclosed `(` in it would hide the commas that follow.
 fn nest_selectors(parent: &str, nested: &str) -> Option<String> {
     let parents = split_top_level(parent, ',');
     let children = split_top_level(nested, ',');
     if parents.len().saturating_mul(children.len()) > MAX_NESTED_SELECTORS {
-        diagnostics::guard(diagnostics::Guard::CssAtRuleNestingDepth, "nested selector list too large; rule dropped");
+        diagnostics::guard(diagnostics::Guard::CssNestedSelectorsTooLarge, "nested selector list too large; rule dropped");
         return None;
     }
     let mut combined = Vec::new();
@@ -813,10 +816,13 @@ fn nest_selectors(parent: &str, nested: &str) -> Option<String> {
             let copies = child.matches('&').count().max(1);
             bytes = bytes.saturating_add(child.len() + 2).saturating_add(copies.saturating_mul(parent.len() + 1));
             if bytes > MAX_NESTED_SELECTOR_BYTES {
-                diagnostics::guard(diagnostics::Guard::CssAtRuleNestingDepth, "nested selector text too large; rule dropped");
+                diagnostics::guard(diagnostics::Guard::CssNestedSelectorsTooLarge, "nested selector text too large; rule dropped");
                 return None;
             }
-            combined.push(if child.contains('&') { child.replace('&', parent) } else { format!("{parent} {child}") });
+            let selector = if child.contains('&') { child.replace('&', parent) } else { format!("{parent} {child}") };
+            if parse_selector(&selector).is_some() {
+                combined.push(selector);
+            }
         }
     }
     (!combined.is_empty()).then(|| combined.join(", "))
@@ -928,6 +934,24 @@ fn parse_selector_list(text: &str) -> Vec<Selector> {
     split_top_level(text, ',').iter().filter_map(|chunk| parse_selector(chunk.trim())).collect()
 }
 
+/// Whether every `(` and `[` outside a string is closed, in order.
+fn brackets_balanced(text: &str) -> bool {
+    let mut open = Vec::new();
+    let mut quote: Option<char> = None;
+    for c in text.chars() {
+        match (quote, c) {
+            (Some(q), _) if c == q => quote = None,
+            (Some(_), _) => {}
+            (None, '"' | '\'') => quote = Some(c),
+            (None, '(') => open.push(')'),
+            (None, '[') => open.push(']'),
+            (None, ')' | ']') if open.pop() != Some(c) => return false,
+            _ => {}
+        }
+    }
+    quote.is_none() && open.is_empty()
+}
+
 /// The most compounds one selector may have. Real selectors have a
 /// handful; the cap bounds what one hostile selector can cost the cascade
 /// (matching is linear in compounds × ancestors, see
@@ -936,7 +960,13 @@ fn parse_selector_list(text: &str) -> Vec<Selector> {
 pub const MAX_SELECTOR_COMPOUNDS: usize = 64;
 
 /// Parses one full selector (a combinator-joined chain of compounds).
+/// One with an unclosed `(` or `[` is invalid: in CSS syntax the bracket
+/// would run on past the rule's `{` (found by the `parse_stylesheet` fuzz
+/// target, where accepting it let nested rules multiply its text).
 fn parse_selector(text: &str) -> Option<Selector> {
+    if !brackets_balanced(text) {
+        return None;
+    }
     let tokens = tokenize_selector(text);
     if tokens.is_empty() {
         return None;
@@ -1707,23 +1737,43 @@ mod tests {
     }
 
     /// Regression (fuzz target `parse_stylesheet`): a parent with an
-    /// unclosed `(` hides the commas of its expansion, so every level
-    /// counted as one parent and passed the selector-count cap while the
-    /// text grew 100x per level. The text cap stops it at the second level.
+    /// unclosed `(` hid the commas of its expansion, so every level counted
+    /// as one parent and passed the selector-count cap while the text grew
+    /// 100x per level (5 KB -> ~800 MB). An invalid selector matches
+    /// nothing, so it is not passed down: nothing is built past the first
+    /// level, and no cap is needed to stop it.
     #[test]
     fn nesting_under_an_unclosed_paren_cannot_multiply_selector_text() {
         use diagnostics::{collector::capture, Guard};
         let list = (0..100).map(|i| format!(".c{i}")).collect::<Vec<_>>().join(",");
         let css = format!("a:not( {{ {list} {{ {list} {{ {list} {{ {list} {{ x: 1 }} }} }} }} }}");
-        let start = std::time::Instant::now();
-        let (_, c) = capture(|| parse_stylesheet(&css));
-        assert!(c.saw_guard(Guard::CssAtRuleNestingDepth), "{:?}", c.events);
-        assert!(start.elapsed() < std::time::Duration::from_secs(1), "{:?}", start.elapsed());
+        let (sheet, c) = capture(|| parse_stylesheet(&css));
+        assert!(sheet.rules.is_empty(), "{sheet:?}");
+        assert!(c.events.is_empty(), "stopped by validity, not by a cap: {:?}", c.events);
+
+        // Unclosed brackets make a selector invalid at the top level too;
+        // brackets inside a string do not count.
+        assert!(parse_stylesheet("a:not(.x { color: red }").rules.is_empty());
+        assert!(parse_stylesheet("[data-x] .y] { color: red }").rules.is_empty());
+        assert_eq!(parse_stylesheet("[title=\"a(b]\"] { color: red }").rules.len(), 1);
+
+        // A valid sibling of an invalid selector still nests; the invalid
+        // half is dropped at each level.
+        let sheet = parse_stylesheet(".a, b:not() { .x { .y { z: 1 } } }");
+        let nested: Vec<usize> = sheet.rules.iter().map(|r| r.selectors.len()).collect();
+        assert_eq!(nested, vec![1, 1, 1], "{sheet:?}");
+
+        // The same lists under a valid parent: the count cap drops the
+        // second level (100 x 100 > MAX_NESTED_SELECTORS).
+        let css = format!(".p {{ {list} {{ {list} {{ x: 1 }} }} }}");
+        let (sheet, c) = capture(|| parse_stylesheet(&css));
+        assert!(c.saw_guard(Guard::CssNestedSelectorsTooLarge), "{:?}", c.events);
+        assert_eq!(sheet.rules.len(), 2, "`.p` and its first level survive; the second is dropped");
 
         // `&` copies the parent: many of them in one child are sized first.
         let amps = format!(".{} {{ {} {{ x: 1 }} }}", "a".repeat(1000), "&".repeat(1000));
         let (sheet, c) = capture(|| parse_stylesheet(&amps));
-        assert!(c.saw_guard(Guard::CssAtRuleNestingDepth));
+        assert!(c.saw_guard(Guard::CssNestedSelectorsTooLarge));
         assert_eq!(sheet.rules.len(), 1, "the parent rule survives; the nested one is dropped");
     }
 
