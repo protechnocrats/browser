@@ -155,10 +155,14 @@ pub enum Guard {
     /// cannot use (not an image for an image request, not readable by the
     /// document's script for a script request; ADR 025 §5).
     RendererResponseWithheld,
+    /// `css_parser`: a nested rule's selector list, written out against its
+    /// parent's, would pass `MAX_NESTED_SELECTORS` or
+    /// `MAX_NESTED_SELECTOR_BYTES`; the nested rule was dropped.
+    CssNestedSelectorsTooLarge,
 }
 
 impl Guard {
-    pub const ALL: [Guard; 40] = [
+    pub const ALL: [Guard; 41] = [
         Guard::HtmlNestingDepth,
         Guard::CssNotNestingDepth,
         Guard::CssAtRuleNestingDepth,
@@ -199,6 +203,7 @@ impl Guard {
         Guard::PageUnresponsive,
         Guard::FrameBudgetExceeded,
         Guard::RendererResponseWithheld,
+        Guard::CssNestedSelectorsTooLarge,
     ];
 
     /// Stable snake_case identifier — the `guard` field on the event and
@@ -246,6 +251,7 @@ impl Guard {
             Guard::PageUnresponsive => "page_unresponsive",
             Guard::FrameBudgetExceeded => "frame_budget_exceeded",
             Guard::RendererResponseWithheld => "renderer_response_withheld",
+            Guard::CssNestedSelectorsTooLarge => "css_nested_selectors_too_large",
         }
     }
 }
