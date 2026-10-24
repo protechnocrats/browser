@@ -978,7 +978,7 @@ In `docs/adr/`. Each is written before the code it constrains.
 | Risk | Mitigation |
 |---|---|
 | Boa cannot be interrupted (0.22 included), so a script budget can't be enforced in-thread. The audit exceptions expire on 2026-12-31. | M38a: the browser kills a renderer that stops finishing ticks (ADR 013); the Boa upgrade is done first in M38a. Thread mode keeps only Boa's loop and recursion limits. |
-| `ttf-parser`, the parser for untrusted fonts since M35, is listed as unmaintained (RUSTSEC-2026-0192), and `rustybuzz` depends on it. | Accepted with reasons in `deny.toml` and ADR 009: fuzz targets, hostile-font tests, and web-font bytes validated before parsing. If a parser bug turns up that upstream doesn't fix, replace the parser and shaper together, evaluated against the same fuzz corpus. |
+| `ttf-parser`, the parser for untrusted fonts since M35, is listed as unmaintained (RUSTSEC-2026-0192), and so is `rustybuzz`, which depends on it (RUSTSEC-2026-0206). | Both accepted with reasons in `deny.toml` and ADR 009: fuzz targets, hostile-font tests, and web-font bytes validated before parsing. If a parser bug turns up that upstream doesn't fix, replace the parser and shaper together, evaluated against the same fuzz corpus. |
 | Incremental restyle or layout gets stale-state bugs. | The full-versus-incremental oracles are merge gates. Every new feature extends them. |
 | New dependencies break the memory-safety or vendor stance. | The dependency ADR gate, a pure-Rust preference, and replaceability behind traits. |
 | Scope creep toward "complete" web compatibility. | The curated API surface: a new Web API needs a written permission, fingerprint and capability policy first. |

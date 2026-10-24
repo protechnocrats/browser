@@ -1,6 +1,6 @@
 # Milestone 25 — Guardrails & CI hardening
 
-> **Status:** Done, with gaps. **Still open:** the libFuzzer jobs and CI workflows are written; no run observed: the repository has a GitHub remote (`origin`), but its Actions history was not checked, and libFuzzer needs `g++`, absent locally. ~~Two `cargo audit` exceptions for Boa 0.17 expire 2026-12-31~~ — removed by the Boa 0.22 upgrade (M38a).
+> **Status:** Done, with gaps. **Still open:** a passing nightly fuzz run (its first run, 2026-10-23, built the initial commit, before the `--target` fix). ~~No CI run observed~~ — every PR job passes on GitHub Actions (PR #1, 2026-10-23), `fuzz-smoke` included; see "First CI runs" below. ~~Two `cargo audit` exceptions for Boa 0.17 expire 2026-12-31~~ — removed by the Boa 0.22 upgrade (M38a).
 > Overall status: `AUDIT.md` · the plan: `ROADMAP.md`.
 
 **Goal:** make the discipline that already existed non-optional, cover the
@@ -115,9 +115,52 @@ The point of fuzzing is to find things; it did, before it was ever run in CI.
    animated WebP with a huge canvas. The cap is now a small function
    (`check_decode_dimensions`) tested directly (see M27).
 
+## First CI runs (2026-10-22/23)
+
+The workflows first ran on PR #1 (Milestone 41). Getting `fuzz-smoke` to
+build and run took two script fixes, and its first real run found five bugs:
+
+1. `cargo-fuzz` defaults `--target` to the triple it was built for; the
+   prebuilt binary from `taiki-e/install-action` is static musl, and ASan
+   cannot link against static libc. `fuzz-smoke.sh` now passes the nightly
+   toolchain's host triple.
+2. That fix dropped the space after `--`, so libFuzzer's first flag reached
+   `cargo-fuzz` as `---max_total_time=…`; restored.
+3. `decode_auto`: a well-formed PNG whose IHDR declares 3 × 4,294,443,012
+   pixels made `decode_png` allocate a ~51 GB output buffer. `png`'s
+   `Limits` bound only its own allocations; the shared pixel cap
+   (`check_decode_dimensions`) now runs first.
+4. `font_parse`: a `ttcf` header claiming 2^32−1 fonts tripped
+   `ttf-parser`'s length debug-assert. Collections whose offset table does
+   not fit in the file are refused before parsing, and in the directory scan.
+5. `js_script`: Boa collects lazily, so libFuzzer's leak check reported
+   what the script left reachable. The target now calls
+   `js::collect_garbage()` after each input, as a page thread does.
+6. `parse_stylesheet`: a parent selector with an unclosed `(` hid its
+   commas from the nested-selector count, so every level passed
+   `MAX_NESTED_SELECTORS` while multiplying its text (5 KB of CSS → ~800 MB,
+   12 s under ASan). Nested selector text is now capped at 64 KiB, sized
+   before it is built (reported as `Guard::CssNestedSelectorsTooLarge`, as
+   the selector-count cap now is). A follow-up fixed the cause: a selector
+   with an unclosed `(` or `[` is invalid (in CSS syntax the bracket would
+   run past the rule's `{`), and a nested rule passes down only the
+   combined selectors that parse, so that input builds nothing past its
+   first level.
+7. `decode_auto`: `zune-jpeg` 0.4 debug-asserts when entropy data runs out
+   mid-symbol (it saturates in release). 0.5 removed the assertion as a
+   known false positive; upgraded, with the same 16384 × 16384 limits.
+
+Each bug has a regression test in its crate and its input as a seed. The
+same PR patched the rustls/webpki advisories and accepted RUSTSEC-2026-0206
+(`rustybuzz` unmaintained) alongside the `ttf-parser` exception.
+
+The nightly job's first run (03:17 UTC, 2026-10-23) ran before PR #1 was
+merged, so it built the initial commit's script, without fix 1, and every
+target failed with `sanitizer is incompatible with statically linked libc`.
+It has not yet run against `main`.
+
 ## Known gaps
-- `fuzz-smoke`/`fuzz-nightly`/`supply-chain` workflows are unexecuted; their
-  commands were run individually here except libFuzzer itself.
+- `fuzz-nightly` has not passed yet (see above).
 - No OSS-Fuzz. Fuzz targets for fonts, `@font-face`, `Content-Type`/header
   parsing and the JS→DOM binding surface are M32's scope.
 - `cargo deny` reports duplicate-version warnings (`windows-sys`, `syn`,
