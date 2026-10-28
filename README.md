@@ -134,14 +134,8 @@ See [`CONTRIBUTING.md`](CONTRIBUTING.md).
 
 ## License
 
-Copyright (C) 2026 Protechnocrats
+Copyright (c) 2026 Protechnocrats
 
-This program is free software: you can redistribute it and/or modify it
-under the terms of the GNU General Public License version 3, as published
-by the Free Software Foundation (`SPDX-License-Identifier: GPL-3.0-only`).
-
-This program is distributed in the hope that it will be useful, but
-WITHOUT ANY WARRANTY; without even the implied warranty of MERCHANTABILITY
-or FITNESS FOR A PARTICULAR PURPOSE. See [`COPYING`](COPYING) for the full
-text. Bundled third-party fonts and
+Licensed under the MIT License (`SPDX-License-Identifier: MIT`); see
+[`LICENSE`](LICENSE) for the full text. Bundled third-party fonts and
 data keep their own licenses; see the license files next to them.

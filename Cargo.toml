@@ -44,7 +44,7 @@ members = [
 
 [workspace.package]
 edition = "2021"
-license = "GPL-3.0-only"
+license = "MIT"
 
 # Panic strategy (docs/adr/007-panic-containment.md): every profile must
 # keep the default `panic = "unwind"`. A page thread's panic is caught and
