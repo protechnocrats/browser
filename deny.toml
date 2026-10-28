@@ -38,7 +38,7 @@ ignore = [
 [licenses]
 version = 2
 # Permissive licenses only, each compatible with the project's
-# GPL-3.0-only (see COPYING). Copyleft (GPL/AGPL/LGPL-only/MPL) is not
+# MIT license (see LICENSE). Copyleft (GPL/AGPL/LGPL-only/MPL) is not
 # allowed without an explicit, reasoned exception.
 allow = [
     "MIT",
@@ -58,7 +58,7 @@ allow = [
 ]
 confidence-threshold = 0.9
 
-# Workspace crates are GPL-3.0-only (see COPYING) and `publish = false`,
+# Workspace crates are MIT (see LICENSE) and `publish = false`,
 # which `private` covers.
 [licenses.private]
 ignore = true

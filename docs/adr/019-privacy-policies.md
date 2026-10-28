@@ -28,10 +28,10 @@
   is fuzzed (`filter_list`): lists are untrusted input.
 - **What ships:** no third-party list is bundled. A bundled list would go
   stale: lists change daily, and a copy frozen into a release blocks
-  yesterday's trackers. The licence is no longer an obstacle: EasyList and
-  EasyPrivacy are GPLv3-or-later / CC BY-SA 3.0, compatible with the
-  project's GPL-3.0-only (bundling one would keep its own licence and
-  attribution beside it). The profile loads list files
+  yesterday's trackers. The licence is a second reason: EasyList and
+  EasyPrivacy are GPLv3-or-later / CC BY-SA 3.0, copyleft terms that a
+  bundled copy would bring into the project's MIT-licensed releases; a
+  list the user downloads keeps its own licence. The profile loads list files
   from its `filters/` directory (`ads-*.txt`, `trackers-*.txt`,
   `ai-*.txt`); `app --fetch-filter-list URL` downloads one when the user
   asks. A small built-in list written for this project blocks a handful of

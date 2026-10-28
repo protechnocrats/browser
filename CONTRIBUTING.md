@@ -23,7 +23,7 @@ open an issue to discuss anything large before you start on it.
 - A new crate is listed in `scripts/core-crates.txt` (platform-free) or
   `scripts/platform-crates.txt` (may use `wgpu`/`winit`).
 - New dependencies use a license allowed in [`deny.toml`](deny.toml) that
-  is compatible with GPL-3.0-only.
+  is compatible with MIT.
 - Every commit is signed off (see below).
 
 ## Be honest about what was verified
@@ -55,5 +55,5 @@ Changes whose commits are not all signed off can't be merged.
 
 ## License
 
-The project is licensed under GPL-3.0-only (see [`COPYING`](COPYING)), and
+The project is licensed under MIT (see [`LICENSE`](LICENSE)), and
 contributions are accepted under the same license.
